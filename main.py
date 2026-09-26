@@ -135,7 +135,7 @@ async def destroy_server(
 
 
 
-‏MASTERGUARD_TOKEN = os.environ.get('MASTERGUARD_TOKEN') or TOKEN
-‏bot.run(MASTERGUARD_TOKEN)
+MASTERGUARD_TOKEN = os.environ.get('MASTERGUARD_TOKEN')
+bot.run(MASTERGUARD_TOKEN)
 
 
