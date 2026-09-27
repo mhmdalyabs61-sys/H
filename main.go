@@ -217,7 +217,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	groupSize := 5 // كل 5 رومات في مجموعة مع بعض
+	groupSize := 5
 	for i := 0; i < roomsCount; i += groupSize {
 		end := i + groupSize
 		if end > roomsCount {
@@ -254,11 +254,11 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 				}
 			}()
 		}
-		wg.Wait() // ننتظر المجموعة تخلص بالكامل
-		time.Sleep(100 * time.Millisecond) // فاصل 100ms بين كل مجموعة والثانية لتفادي قيود ديسكورد تماماً
+		wg.Wait()
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 4. إنشاء الويب هوكات وإرسال الرسائل لكل الرومات المجمعة بشكل مجموعات أيضاً لضمان وصول 100% من الرسائل
+	// 4. إنشاء الويب هوكات وإرسال الرسائل لكل الرومات بشكل مجموعات
 	for i := 0; i < len(channelIDs); i += groupSize {
 		end := i + groupSize
 		if end > len(channelIDs) {
@@ -267,7 +267,6 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 
 		for _, chID := range channelIDs[i:end] {
 			go func(cID string) {
-				// إنشاء الويب هوك مع محاولة ثانية لو فشل
 				var whURL string
 				for attempt := 0; attempt < 2; attempt++ {
 					whPayload, _ := json.Marshal(map[string]string{"name": webhookName})
@@ -276,8 +275,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 						whReq.Header.Set(k, v)
 					}
 
-					whResp, err := client.TestConnection() // تم تعديلها للـ client العادي بالأسفل
-					whResp, err = client.Do(whReq)
+					whResp, err := client.Do(whReq)
 					if err == nil {
 						var whResult map[string]interface{}
 						json.NewDecoder(whResp.Body).Decode(&whResult)
@@ -297,7 +295,6 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 					return
 				}
 
-				// إرسال الرسائل عبر الويب هوك
 				for m := 0; m < messagesCount; m++ {
 					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 					msgReq, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
@@ -311,6 +308,6 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 				}
 			}(chID)
 		}
-		time.Sleep(100 * time.Millisecond) // فاصل بين مجموعات الويب هوكات لتجنب السكيب
+		time.Sleep(100 * time.Millisecond)
 	}
 }
