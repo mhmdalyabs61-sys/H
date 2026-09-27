@@ -1,4 +1,4 @@
-module destroybot
+module destroybo
 
 go 1.22
 
