@@ -260,3 +260,20 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		}()
 	}
 }
+package main
+
+import (
+    "os"
+    "os/signal"
+    "syscall"
+    // باقي المكتبات حقك...
+)
+
+func main() {
+    // كود تشغيل البوت وتسجيل الدخول هنا...
+
+    // 🛑 هذا الكود هو اللي يخلي البوت شغال وما يطفى
+    sc := make(chan os.Signal, 1)
+    signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+    <-sc
+}
