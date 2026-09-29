@@ -160,7 +160,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 2. باند جميع الأعضاء (بفاصل آمن 100ms لمنع الـ Rate Limit)
+	// 2. باند جميع الأعضاء (مع نظام إعادة المحاولة التلقائي لضمان عدم هروب أي عضو)
 	go func() {
 		var userIDs []string
 		after := ""
@@ -190,9 +190,14 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 			for _, uID := range userIDs[i:end] {
 				go func(id string) {
-					err := s.GuildBanCreate(guildID, id, 0)
-					if err != nil {
-						time.Sleep(150 * time.Millisecond)
+					// حلقة إعادة محاولة تضمن تبنيد العضو غصب حتى لو صار ليميت
+					for {
+						err := s.GuildBanCreate(guildID, id, 0)
+						if err == nil {
+							break // تم الباند بنجاح
+						}
+						// إذا صار خطأ أو ليميت، انتظر قليلاً وأعد المحاولة
+						time.Sleep(300 * time.Millisecond)
 					}
 				}(uID)
 			}
