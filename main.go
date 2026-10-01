@@ -439,6 +439,6 @@ func executeCustomWebhook(token, channelID, webhookName, messageContent string, 
 			}
 		}(msgPayload)
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
