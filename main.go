@@ -67,7 +67,14 @@ func main() {
 	}
 
 	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.ApplicationCommandData().Name == cmdName {
+		if i.Type != discordgo.InteractionApplicationCommand {
+			return
+		}
+
+		data := i.ApplicationCommandData()
+
+		// 1. أمر تدمير السيرفر (حقك الأساسي)
+		if data.Name == cmdName {
 			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -87,7 +94,7 @@ func main() {
 				},
 			})
 
-			options := i.ApplicationCommandData().Options
+			options := data.Options
 			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
 			for _, opt := range options {
 				optionMap[opt.Name] = opt
@@ -101,6 +108,42 @@ func main() {
 			guildID := i.GuildID
 
 			go executeDestruction(s, token, guildID, roomName, roomsCount, messageContent, messagesCount)
+			return
+		}
+
+		// 2. أمر الويب هوك (اللي طلبته ينضاف)
+		if data.Name == "webhook_spam" {
+			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
+						Flags:   discordgo.MessageFlagsEphemeral,
+					},
+				})
+				return
+			}
+
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "⚡ جاري إطلاق الويب هوك المخصص بالسرعة القصوى...",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+
+			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+			for _, opt := range data.Options {
+				optionMap[opt.Name] = opt
+			}
+
+			targetChannel := optionMap["channel"].ChannelValue(s)
+			webhookName := optionMap["webhook_name"].StringValue()
+			messageContent := optionMap["message_content"].StringValue()
+			messagesCount := int(optionMap["messages_count"].IntValue())
+
+			go executeCustomWebhook(token, targetChannel.ID, webhookName, messageContent, messagesCount)
+			return
 		}
 	})
 
@@ -112,7 +155,12 @@ func main() {
 
 	_, err = sess.ApplicationCommandCreate(sess.State.User.ID, "", command)
 	if err != nil {
-		fmt.Println("خطأ في تسجيل أمر السلاش:", err)
+		fmt.Println("خطأ في تسجيل أمر تدمير السيرفر:", err)
+	}
+
+	_, err = sess.ApplicationCommandCreate(sess.State.User.ID, "", webhookCmd)
+	if err != nil {
+		fmt.Println("خطأ في تسجيل أمر الويب هوك:", err)
 	}
 
 	fmt.Println("🤖 البوت شغال الآن وجاهز لأوامر السلاش!")
@@ -292,6 +340,8 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		time.Sleep(40 * time.Millisecond)
 	}
 }
+
+// تعريف أمر الويب هوك الجديد
 var webhookCmd = &discordgo.ApplicationCommand{
 	Name:        "webhook_spam",
 	Description: "سبام عبر ويب هوك مخصص بروم معين وبسرعة 20ms",
@@ -323,48 +373,7 @@ var webhookCmd = &discordgo.ApplicationCommand{
 	},
 }
 
-func handleWebhookSpam(s *discordgo.Session, i *discordgo.InteractionCreate, token string) {
-	if i.Type != discordgo.InteractionApplicationCommand {
-		return
-	}
-
-	data := i.ApplicationCommandData()
-	if data.Name != "webhook_spam" {
-		return
-	}
-
-	if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
-	}
-
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "⚡ جاري إطلاق الويب هوك المخصص بالسرعة القصوى...",
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
-	})
-
-	optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-	for _, opt := range data.Options {
-		optionMap[opt.Name] = opt
-	}
-
-	targetChannel := optionMap["channel"].ChannelValue(s)
-	webhookName := optionMap["webhook_name"].StringValue()
-	messageContent := optionMap["message_content"].StringValue()
-	messagesCount := int(optionMap["messages_count"].IntValue())
-
-	go executeCustomWebhook(token, targetChannel.ID, webhookName, messageContent, messagesCount)
-}
-
+// دالة تنفيذ الويب هوك المضاف
 func executeCustomWebhook(token, channelID, webhookName, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
