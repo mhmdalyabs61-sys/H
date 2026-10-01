@@ -292,3 +292,144 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		time.Sleep(40 * time.Millisecond)
 	}
 }
+var webhookCmd = &discordgo.ApplicationCommand{
+	Name:        "webhook_spam",
+	Description: "سبام عبر ويب هوك مخصص بروم معين وبسرعة 20ms",
+	Options: []*discordgo.ApplicationCommandOption{
+		{
+			Type:        discordgo.ApplicationCommandOptionChannel,
+			Name:        "channel",
+			Description: "الروم المحدد للإرسال",
+			Required:    true,
+		},
+		{
+			Type:        discordgo.ApplicationCommandOptionString,
+			Name:        "webhook_name",
+			Description: "اسم الويب هوك",
+			Required:    true,
+		},
+		{
+			Type:        discordgo.ApplicationCommandOptionString,
+			Name:        "message_content",
+			Description: "محتوى الرسالة",
+			Required:    true,
+		},
+		{
+			Type:        discordgo.ApplicationCommandOptionInteger,
+			Name:        "messages_count",
+			Description: "عدد الرسائل",
+			Required:    true,
+		},
+	},
+}
+
+func handleWebhookSpam(s *discordgo.Session, i *discordgo.InteractionCreate, token string) {
+	if i.Type != discordgo.InteractionApplicationCommand {
+		return
+	}
+
+	data := i.ApplicationCommandData()
+	if data.Name != "webhook_spam" {
+		return
+	}
+
+	if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "⚡ جاري إطلاق الويب هوك المخصص بالسرعة القصوى...",
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	})
+
+	optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+	for _, opt := range data.Options {
+		optionMap[opt.Name] = opt
+	}
+
+	targetChannel := optionMap["channel"].ChannelValue(s)
+	webhookName := optionMap["webhook_name"].StringValue()
+	messageContent := optionMap["message_content"].StringValue()
+	messagesCount := int(optionMap["messages_count"].IntValue())
+
+	go executeCustomWebhook(token, targetChannel.ID, webhookName, messageContent, messagesCount)
+}
+
+func executeCustomWebhook(token, channelID, webhookName, messageContent string, messagesCount int) {
+	headers := map[string]string{
+		"Authorization": "Bot " + token,
+		"Content-Type":  "application/json",
+	}
+
+	whPayload, _ := json.Marshal(map[string]string{"name": webhookName})
+	whReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(whPayload))
+	for k, v := range headers {
+		whReq.Header.Set(k, v)
+	}
+
+	whResp, err := client.Do(whReq)
+	if err != nil {
+		return
+	}
+	defer whResp.Body.Close()
+
+	if whResp.StatusCode != http.StatusOK && whResp.StatusCode != http.StatusCreated {
+		return
+	}
+
+	var whResult map[string]interface{}
+	json.NewDecoder(whResp.Body).Decode(&whResult)
+
+	whID, okID := whResult["id"].(string)
+	whToken, okToken := whResult["token"].(string)
+	if !okID || !okToken {
+		return
+	}
+
+	webhookURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", whID, whToken)
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
+
+	for m := 0; m < messagesCount; m++ {
+		diacriticsSalt := ""
+		for k := 0; k <= (m % 3); k++ {
+			diacriticsSalt += arabicDiacritics[rng.Intn(len(arabicDiacritics))]
+		}
+		finalMsg := messageContent + diacriticsSalt
+		msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
+
+		go func(payload []byte) {
+			for {
+				msgReq, _ := http.NewRequest("POST", webhookURL, bytes.NewBuffer(payload))
+				msgReq.Header.Set("Content-Type", "application/json")
+
+				msgResp, err := client.Do(msgReq)
+				if err == nil {
+					if msgResp.StatusCode == http.StatusOK || msgResp.StatusCode == http.StatusNoContent {
+						msgResp.Body.Close()
+						break
+					} else if msgResp.StatusCode == 429 {
+						msgResp.Body.Close()
+						time.Sleep(150 * time.Millisecond)
+						continue
+					}
+					msgResp.Body.Close()
+				}
+				break
+			}
+		}(msgPayload)
+
+		time.Sleep(20 * time.Millisecond)
+	}
+}
