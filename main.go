@@ -458,7 +458,8 @@ func executeBucketLimitWebhookRotation(token, channelID, webhookName, messageCon
 					diacriticsSalt += arabicDiacritics[rng.Intn(len(arabicDiacritics))]
 				}
 				finalMsg := messageContent + diacriticsSalt
-				msgPayload, _ := json.JSONMarshal(map[string]string{"content": finalMsg}) // تم ضبط الـ json بنجاح
+				msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
+ // تم ضبط الـ json بنجاح
 
 				for {
 					msgReq, _ := http.NewRequest("POST", wh.URL, bytes.NewBuffer(msgPayload))
