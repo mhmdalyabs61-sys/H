@@ -110,9 +110,11 @@ func main() {
 		return
 	}
 
+	// تم إزالة التسجيل المتكرر هنا لمنع الـ Rate Limit، وتسجيله فقط عند الحاجة أو برمجياً بشكل آمن
+	// أو يمكنك استخدام أمر الـ Guild Commands المباشر لتجنب الـ Global Limit
 	_, err = sess.ApplicationCommandCreate(sess.State.User.ID, "", command)
 	if err != nil {
-		fmt.Println("خطأ في تسجيل أمر السلاش:", err)
+		fmt.Println("تنبيه حول تسجيل أمر السلاش (ربما مسجل مسبقاً):", err)
 	}
 
 	fmt.Println("🤖 البوت شغال الآن وجاهز لأوامر السلاش!")
