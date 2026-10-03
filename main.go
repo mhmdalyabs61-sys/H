@@ -69,7 +69,7 @@ func main() {
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك (5 ويب هوكات ترسل لمدة 5 ثواني ثم تحذف وتتكرر)",
+		Description: "سبام ويب هوك (5 ويب هوكات ترسل لمدة 5 ثواني وتحذف وتتكرر حتى يكتمل العدد)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -314,12 +314,19 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 	sent := 0
 	var mu sync.Mutex
 
-	// حلقة مستمرة تدور حتى يتم إرسال العدد الإجمالي المطلوب بالكامل عبر الدورات
-	for sent < messagesCount {
-		// 1. إنشاء 5 ويب هوكات جديدة في بداية كل دورة
+	// حلقة مستمرة تدور وتكرر العملية حتى يكتمل العدد الإجمالي للرسائل المطلوبة بالكامل
+	for {
+		mu.Lock()
+		if sent >= messagesCount {
+			mu.Unlock()
+			break
+		}
+		mu.Unlock()
+
 		var activeURLs []string
 		var createWg sync.WaitGroup
 
+		// 1. إنشاء 5 ويب هوكات في بداية الدورة
 		for i := 0; i < 5; i++ {
 			createWg.Add(1)
 			go func() {
@@ -358,18 +365,17 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 			continue
 		}
 
-		// مفتاح تحكم لإيقاف الرش فور انتهاء الـ 5 ثواني أو اكتمال العدد المطلوب
-		stopSignal := make(chan struct{})
+		stopSpam := make(chan struct{})
 		var spamWg sync.WaitGroup
 
-		// 2. الـ 5 ويب هوكات تبدأ ترسل بأقصى قوة وطاقة خلال الـ 5 ثواني القادمة
+		// 2. الـ 5 ويب هوكات ترسل بأقصى طاقة وبدون توقف
 		for _, url := range activeURLs {
 			spamWg.Add(1)
 			go func(whURL string) {
 				defer spamWg.Done()
 				for {
 					select {
-					case <-stopSignal:
+					case <-stopSpam:
 						return
 					default:
 					}
@@ -377,61 +383,56 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 					mu.Lock()
 					if sent >= messagesCount {
 						mu.Unlock()
-						close(stopSignal)
+						close(stopSpam)
 						return
 					}
-					sent++
 					mu.Unlock()
 
-					// إرسال الرسالة مع التعامل الذكي مع حماية ديسكورد (Rate Limit)
-					for {
-						select {
-						case <-stopSignal:
-							return
-						default:
-						}
+					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+					req, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
+					req.Header.Set("Content-Type", "application/json")
 
-						msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-						req, _ := http.NewRequest("POST", whURL+"?wait=true", bytes.NewBuffer(msgPayload))
-						req.Header.Set("Content-Type", "application/json")
+					resp, err := client.Do(req)
+					if err != nil {
+						time.Sleep(10 * time.Millisecond)
+						continue
+					}
 
-						resp, err := client.Do(req)
-						if err != nil {
-							time.Sleep(50 * time.Millisecond)
-							continue
-						}
-
-						if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-							resp.Body.Close()
-							break
-						}
-
-						if resp.StatusCode == 429 {
-							retryAfterStr := resp.Header.Get("Retry-After")
-							resp.Body.Close()
-
-							sleepDuration := 500 * time.Millisecond
-							if retryAfterStr != "" {
-								if seconds, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-									sleepDuration = time.Duration(seconds * float64(time.Second))
-								}
+					if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+						mu.Lock()
+						sent++
+						mu.Unlock()
+					} else if resp.StatusCode == 429 {
+						// قراءة وقت الحماية إن وجد أو الانتظار البسيط لتجنب الباند
+						sleepDur := 100 * time.Millisecond
+						if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+							if secs, err := strconv.ParseFloat(retryAfter, 64); err == nil {
+								sleepDur = time.Duration(secs * float64(time.Second))
 							}
-							time.Sleep(sleepDuration)
-							continue
 						}
-
 						resp.Body.Close()
-						break
+						time.Sleep(sleepDur)
+						continue
+					}
+					resp.Body.Close()
+
+					mu.Lock()
+					completed := sent >= messagesCount
+					mu.Unlock()
+
+					if completed {
+						close(stopSpam)
+						return
 					}
 				}
 			}(url)
 		}
 
-		// 3. الانتظار 5 ثواني بالضبط والويب هوكات ترسل خلالها بدون توقف
+		// 3. الانتظار لمدة 5 ثواني بالضبط والويب هوكات ترسل خلالها بدون توقف
 		time.Sleep(5 * time.Second)
 
-		// إيقاف جميع عمليات الإرسال الحالية فور انتهاء الـ 5 ثواني
-		close(stopSignal)
+		// إيقاف الـ Goroutines الخاصة بالإرسال لهذه الدورة
+		close(stopSpam)
 		spamWg.Wait()
 
 		// 4. حذف الـ 5 ويب هوكات الحالية فوراً
@@ -449,17 +450,9 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		}
 		deleteWg.Wait()
 
-		// إذا تم إنجاز العدد الإجمالي المطلوب، نخرج من اللوب الكلي
-		mu.Lock()
-		if sent >= messagesCount {
-			mu.Unlock()
-			break
-		}
-		mu.Unlock()
-
-		// فاصل زمني قصير جداً قبل بدء الدورة التالية لتفادي ضغط البوت
-		time.Sleep(500 * time.Millisecond)
+		// فاصل قصير جداً قبل بدء الدورة التالية (إن لم يكتمل العدد)
+		time.Sleep(200 * time.Millisecond)
 	}
 
-	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب بالكامل عبر دورات الويب هوكات المستمرة!")
+	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب بالكامل بنجاح من خلال دورات الويب هوكات المستمرة!")
 }
