@@ -69,7 +69,7 @@ func main() {
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك بنظام الدورات المستمرة",
+		Description: "سبام ويب هوك (5 ويب هوكات ترسل لمدة 5 ثواني ثم تحذف وتتكرر)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -154,7 +154,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم بدء عملية سبام الويب هوكات (بالدورات المستمرة)...",
+					Content: "🚀 تم بدء عملية سبام الويب هوكات بنظام الدورات المستمرة...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -313,9 +313,10 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 
 	sent := 0
 	var mu sync.Mutex
-	cycle := 1
 
+	// حلقة مستمرة تدور حتى يتم إرسال العدد الإجمالي المطلوب بالكامل عبر الدورات
 	for sent < messagesCount {
+		// 1. إنشاء 5 ويب هوكات جديدة في بداية كل دورة
 		var activeURLs []string
 		var createWg sync.WaitGroup
 
@@ -357,28 +358,46 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 			continue
 		}
 
+		// مفتاح تحكم لإيقاف الرش فور انتهاء الـ 5 ثواني أو اكتمال العدد المطلوب
+		stopSignal := make(chan struct{})
 		var spamWg sync.WaitGroup
+
+		// 2. الـ 5 ويب هوكات تبدأ ترسل بأقصى قوة وطاقة خلال الـ 5 ثواني القادمة
 		for _, url := range activeURLs {
 			spamWg.Add(1)
 			go func(whURL string) {
 				defer spamWg.Done()
 				for {
+					select {
+					case <-stopSignal:
+						return
+					default:
+					}
+
 					mu.Lock()
 					if sent >= messagesCount {
 						mu.Unlock()
-						break
+						close(stopSignal)
+						return
 					}
 					sent++
 					mu.Unlock()
 
+					// إرسال الرسالة مع التعامل الذكي مع حماية ديسكورد (Rate Limit)
 					for {
+						select {
+						case <-stopSignal:
+							return
+						default:
+						}
+
 						msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 						req, _ := http.NewRequest("POST", whURL+"?wait=true", bytes.NewBuffer(msgPayload))
 						req.Header.Set("Content-Type", "application/json")
 
 						resp, err := client.Do(req)
 						if err != nil {
-							time.Sleep(100 * time.Millisecond)
+							time.Sleep(50 * time.Millisecond)
 							continue
 						}
 
@@ -391,7 +410,7 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 							retryAfterStr := resp.Header.Get("Retry-After")
 							resp.Body.Close()
 
-							sleepDuration := 1 * time.Second
+							sleepDuration := 500 * time.Millisecond
 							if retryAfterStr != "" {
 								if seconds, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
 									sleepDuration = time.Duration(seconds * float64(time.Second))
@@ -404,14 +423,18 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 						resp.Body.Close()
 						break
 					}
-					break 
 				}
 			}(url)
 		}
-		spamWg.Wait()
 
+		// 3. الانتظار 5 ثواني بالضبط والويب هوكات ترسل خلالها بدون توقف
 		time.Sleep(5 * time.Second)
 
+		// إيقاف جميع عمليات الإرسال الحالية فور انتهاء الـ 5 ثواني
+		close(stopSignal)
+		spamWg.Wait()
+
+		// 4. حذف الـ 5 ويب هوكات الحالية فوراً
 		var deleteWg sync.WaitGroup
 		for _, url := range activeURLs {
 			deleteWg.Add(1)
@@ -426,12 +449,17 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		}
 		deleteWg.Wait()
 
+		// إذا تم إنجاز العدد الإجمالي المطلوب، نخرج من اللوب الكلي
+		mu.Lock()
 		if sent >= messagesCount {
+			mu.Unlock()
 			break
 		}
+		mu.Unlock()
 
-		cycle++
+		// فاصل زمني قصير جداً قبل بدء الدورة التالية لتفادي ضغط البوت
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب تماماً عبر دورات الويب هوكات وبدون أي نقص!")
+	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب بالكامل عبر دورات الويب هوكات المستمرة!")
 }
