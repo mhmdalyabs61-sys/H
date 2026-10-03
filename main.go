@@ -31,7 +31,8 @@ func main() {
 		return
 	}
 
-	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildModeration | discordgo.IntentsGuildMessages
+	// تم تعديل الـ Intents وتفعيل جميع الصلاحيات لتجنب أي أخطاء تعريف
+	sess.Identify.Intents = discordgo.IntentsAll
 
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
