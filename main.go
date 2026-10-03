@@ -300,7 +300,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 					msgResp.Body.Close()
 				}
 			}
-		}(cID)
+		}(chID)
 	}
 }
 
