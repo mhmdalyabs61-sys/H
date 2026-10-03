@@ -71,7 +71,7 @@ func main() {
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "أمر سبام ويب هوك السريع مع نظام تدوير وفواصل زمنية دقيقة",
+		Description: "أمر سبام ويب هوك السريع مع نظام تدوير وفواصل زمنية دقيقة وتحقق فعلي",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -372,7 +372,7 @@ func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string
 		var activeWebhooks []string
 		var mu sync.Mutex
 
-		// 1. إنشاء 5 ويب هوكات دفعة واحدة
+		// 1. إنشاء 5 ويب هوكات مع فاصل بسيط لمنع الـ Rate Limit
 		for i := 0; i < 5; i++ {
 			wg.Add(1)
 			go func() {
@@ -405,15 +405,16 @@ func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string
 					}
 				}
 			}()
+			time.Sleep(30 * time.Millisecond)
 		}
 		wg.Wait()
 
 		if len(activeWebhooks) == 0 {
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		// 2. سبام الرسائل عبر الـ 5 ويب هوكات لمدة 5 ثواني
+		// 2. سبام الرسائل والتحقق الفعلي من وصولها (200 أو 201)
 		stopTime := time.Now().Add(5 * time.Second)
 		var spamWg sync.WaitGroup
 
@@ -422,7 +423,6 @@ func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string
 				if sentMessages >= messagesCount {
 					break
 				}
-				sentMessages++
 
 				spamWg.Add(1)
 				go func(url string) {
@@ -434,19 +434,26 @@ func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string
 					req.Header.Set("Content-Type", "application/json")
 
 					resp, err := client.Do(req)
-					if err == nil {
-						if resp.StatusCode == 429 {
-							time.Sleep(500 * time.Millisecond)
-						}
-						resp.Body.Close()
+					if err != nil {
+						return
+					}
+					defer resp.Body.Close()
+
+					// التحقق الفعلي أن الرسالة انرسلت ووصلت بنجاح
+					if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+						mu.Lock()
+						sentMessages++
+						mu.Unlock()
+					} else if resp.StatusCode == 429 {
+						time.Sleep(300 * time.Millisecond)
 					}
 				}(whURL)
 			}
-			time.Sleep(40 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 		}
 		spamWg.Wait()
 
-		// 3. حذف الـ 5 ويب هوكات الحالية بعد انتهاء فترة الـ 5 ثواني
+		// 3. حذف الـ 5 ويب هوكات الحالية
 		for _, whURL := range activeWebhooks {
 			go func(url string) {
 				req, _ := http.NewRequest("DELETE", url, nil)
@@ -457,7 +464,7 @@ func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string
 			}(whURL)
 		}
 
-		// 4. الانتظار لمدة 3 ثواني قبل البدء بالدورة الجديدة
+		// 4. الانتظار 3 ثواني قبل بدء دورة جديدة إذا لم يكتمل العدد الفعلي للرسائل الواصلة
 		if sentMessages < messagesCount {
 			time.Sleep(3 * time.Second)
 		}
