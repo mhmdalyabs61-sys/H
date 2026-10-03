@@ -386,16 +386,20 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 					}
 					
 					if resp.StatusCode == 429 {
-						time.Sleep(500 * time.Millisecond)
+						time.Sleep(1000 * time.Millisecond)
 					}
 					resp.Body.Close()
-					time.Sleep(20 * time.Millisecond)
+					time.Sleep(15 * time.Millisecond)
 				}
 			}(url)
 		}
 		spamWg.Wait()
 
-		s.ChannelMessageSend(channelID, "⏳ انتظار 3 ثوانٍ قبل الحذف...")
+		if sent >= messagesCount {
+			break
+		}
+
+		s.ChannelMessageSend(channelID, "⏳ انتظار 3 ثوانٍ قبل الحذف وإعادة الدورة...")
 		time.Sleep(3 * time.Second)
 
 		var deleteWg sync.WaitGroup
@@ -414,5 +418,5 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 
 		cycle++
 	}
-	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب تماماً!")
+	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب تماماً وبدون أي نقص!")
 }
