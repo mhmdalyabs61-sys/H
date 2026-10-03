@@ -68,7 +68,7 @@ func main() {
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك (أوامر صريحة ومباشرة)",
+		Description: "سبام ويب هوك (أوامر صريحة متتالية)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -153,7 +153,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم بدء تنفيذ أوامر الويب هوك الصريحة...",
+					Content: "🚀 تم بدء أوامر الويب هوك الصريحة...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -304,7 +304,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	}
 }
 
-// دالة صريحة لإنشاء 5 ويب هوكات دفعة واحدة
+// دالة صريحة لإنشاء 5 ويب هوكات
 func createFiveWebhooks(token, channelID, webhookName string) []string {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
@@ -350,7 +350,7 @@ func createFiveWebhooks(token, channelID, webhookName string) []string {
 	return activeURLs
 }
 
-// دالة صريحة لحذف مجموعة الويب هوكات الحالية
+// دالة صريحة لحذف الـ 5 ويب هوكات
 func deleteFiveWebhooks(token string, urls []string) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
@@ -374,7 +374,7 @@ func deleteFiveWebhooks(token string, urls []string) {
 	wg.Wait()
 }
 
-// دالة تنفيذ عملية الرش لمدة 5 ثواني صراحةً
+// دالة الرش لمدة 5 ثواني بأقصى سرعة
 func burstSendForFiveSeconds(urls []string, messageContent string, sentCounter *int, totalGoal int, mu *sync.Mutex) {
 	stopSignal := make(chan struct{})
 	var wg sync.WaitGroup
@@ -427,12 +427,12 @@ func burstSendForFiveSeconds(urls []string, messageContent string, sentCounter *
 	wg.Wait()
 }
 
-// الدالة الرئيسية لتنفيذ الدورات الصريحة والمترابطة خطوة بخطوة
+// دالة تنفيذ الأوامر الصريحة خطوة بخطوة (بدون أي لوب)
 func executeWebhookSpamExplicit(s *discordgo.Session, token, channelID, webhookName, messageContent string, messagesCount int) {
 	sent := 0
 	var mu sync.Mutex
 
-	// --- الدورة الأولى الصريحة ---
+	// --- 1. الدورة الأولى الصريحة ---
 	mu.Lock()
 	if sent >= messagesCount {
 		mu.Unlock()
@@ -446,7 +446,7 @@ func executeWebhookSpamExplicit(s *discordgo.Session, token, channelID, webhookN
 		deleteFiveWebhooks(token, urls1)
 	}
 
-	// --- الدورة الثانية الصريحة ---
+	// --- 2. الدورة الثانية الصريحة ---
 	mu.Lock()
 	if sent >= messagesCount {
 		mu.Unlock()
@@ -461,7 +461,7 @@ func executeWebhookSpamExplicit(s *discordgo.Session, token, channelID, webhookN
 		deleteFiveWebhooks(token, urls2)
 	}
 
-	// --- الدورة الثالثة الصريحة ---
+	// --- 3. الدورة الثالثة الصريحة ---
 	mu.Lock()
 	if sent >= messagesCount {
 		mu.Unlock()
@@ -476,7 +476,7 @@ func executeWebhookSpamExplicit(s *discordgo.Session, token, channelID, webhookN
 		deleteFiveWebhooks(token, urls3)
 	}
 
-	// --- الدورة الرابعة الصريحة ---
+	// --- 4. الدورة الرابعة الصريحة ---
 	mu.Lock()
 	if sent >= messagesCount {
 		mu.Unlock()
@@ -491,7 +491,7 @@ func executeWebhookSpamExplicit(s *discordgo.Session, token, channelID, webhookN
 		deleteFiveWebhooks(token, urls4)
 	}
 
-	// --- الدورة الخامسة الصريحة ---
+	// --- 5. الدورة الخامسة الصريحة ---
 	mu.Lock()
 	if sent >= messagesCount {
 		mu.Unlock()
@@ -506,5 +506,80 @@ func executeWebhookSpamExplicit(s *discordgo.Session, token, channelID, webhookN
 		deleteFiveWebhooks(token, urls5)
 	}
 
-	s.ChannelMessageSend(channelID, "🎉 انتهت دورات الويب هوكات الصريحة!")
+	// --- 6. الدورة السادسة الصريحة ---
+	mu.Lock()
+	if sent >= messagesCount {
+		mu.Unlock()
+		s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب!")
+		return
+	}
+	mu.Unlock()
+
+	urls6 := createFiveWebhooks(token, channelID, webhookName)
+	if len(urls6) > 0 {
+		burstSendForFiveSeconds(urls6, messageContent, &sent, messagesCount, &mu)
+		deleteFiveWebhooks(token, urls6)
+	}
+
+	// --- 7. الدورة السابعة الصريحة ---
+	mu.Lock()
+	if sent >= messagesCount {
+		mu.Unlock()
+		s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب!")
+		return
+	}
+	mu.Unlock()
+
+	urls7 := createFiveWebhooks(token, channelID, webhookName)
+	if len(urls7) > 0 {
+		burstSendForFiveSeconds(urls7, messageContent, &sent, messagesCount, &mu)
+		deleteFiveWebhooks(token, urls7)
+	}
+
+	// --- 8. الدورة الثامنة الصريحة ---
+	mu.Lock()
+	if sent >= messagesCount {
+		mu.Unlock()
+		s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب!")
+		return
+	}
+	mu.Unlock()
+
+	urls8 := createFiveWebhooks(token, channelID, webhookName)
+	if len(urls8) > 0 {
+		burstSendForFiveSeconds(urls8, messageContent, &sent, messagesCount, &mu)
+		deleteFiveWebhooks(token, urls8)
+	}
+
+	// --- 9. الدورة التاسعة الصريحة ---
+	mu.Lock()
+	if sent >= messagesCount {
+		mu.Unlock()
+		s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب!")
+		return
+	}
+	mu.Unlock()
+
+	urls9 := createFiveWebhooks(token, channelID, webhookName)
+	if len(urls9) > 0 {
+		burstSendForFiveSeconds(urls9, messageContent, &sent, messagesCount, &mu)
+		deleteFiveWebhooks(token, urls9)
+	}
+
+	// --- 10. الدورة العاشرة الصريحة ---
+	mu.Lock()
+	if sent >= messagesCount {
+		mu.Unlock()
+		s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب!")
+		return
+	}
+	mu.Unlock()
+
+	urls10 := createFiveWebhooks(token, channelID, webhookName)
+	if len(urls10) > 0 {
+		burstSendForFiveSeconds(urls10, messageContent, &sent, messagesCount, &mu)
+		deleteFiveWebhooks(token, urls10)
+	}
+
+	s.ChannelMessageSend(channelID, "🎉 انتهت دورات الويب هوكات الصريحة بالكامل!")
 }
