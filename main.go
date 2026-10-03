@@ -369,7 +369,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}
 
-	// 2. تجميع الأعضاء وتبنيدهم عبر الدالة الرسمية للمكتبة لتجنب أي أخطاء
+	// 2. تجميع الأعضاء وتبنيدهم بأمان عبر المكتبة الرسمية
 	go func() {
 		after := ""
 		for {
@@ -377,9 +377,12 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 			if err != nil || len(members) == 0 {
 				break
 			}
-			
+
 			var wgBan sync.WaitGroup
 			for _, member := range members {
+				if member == nil || member.User == nil {
+					continue
+				}
 				wgBan.Add(1)
 				go func(userID string) {
 					defer wgBan.Done()
