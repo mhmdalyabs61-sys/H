@@ -69,7 +69,7 @@ func main() {
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك (5 ويب هوكات ترسل لمدة 5 ثواني وتحذف وتتكرر حتى يكتمل العدد)",
+		Description: "سبام ويب هوك (5 ويب هوكات ترسل لمدة 5 ثواني وتحذف وتتكرر صراحة حتى يكتمل العدد)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -154,7 +154,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم بدء عملية سبام الويب هوكات بنظام الدورات المستمرة...",
+					Content: "🚀 تم بدء عملية سبام الويب هوكات بالدورات الصريحة...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -314,19 +314,11 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 	sent := 0
 	var mu sync.Mutex
 
-	// حلقة مستمرة تدور وتكرر العملية حتى يكتمل العدد الإجمالي للرسائل المطلوبة بالكامل
-	for {
-		mu.Lock()
-		if sent >= messagesCount {
-			mu.Unlock()
-			break
-		}
-		mu.Unlock()
-
+	// دالة صريحة لإنشاء 5 ويب هوكات جديدة وإرجاع روابطها
+	createNewWebhooks := func() []string {
 		var activeURLs []string
 		var createWg sync.WaitGroup
 
-		// 1. إنشاء 5 ويب هوكات في بداية الدورة
 		for i := 0; i < 5; i++ {
 			createWg.Add(1)
 			go func() {
@@ -359,16 +351,30 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 			}()
 		}
 		createWg.Wait()
+		return activeURLs
+	}
+
+	// 1. إنشاء الـ 5 ويب هوكات لأول مرة عند البدء
+	activeURLs := createNewWebhooks()
+
+	for {
+		mu.Lock()
+		if sent >= messagesCount {
+			mu.Unlock()
+			break
+		}
+		mu.Unlock()
 
 		if len(activeURLs) == 0 {
 			time.Sleep(1 * time.Second)
+			activeURLs = createNewWebhooks()
 			continue
 		}
 
 		stopSpam := make(chan struct{})
 		var spamWg sync.WaitGroup
 
-		// 2. الـ 5 ويب هوكات ترسل بأقصى طاقة وبدون توقف
+		// 2. الرش المكثف ولمدة 5 ثواني
 		for _, url := range activeURLs {
 			spamWg.Add(1)
 			go func(whURL string) {
@@ -403,39 +409,23 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 						sent++
 						mu.Unlock()
 					} else if resp.StatusCode == 429 {
-						// قراءة وقت الحماية إن وجد أو الانتظار البسيط لتجنب الباند
-						sleepDur := 100 * time.Millisecond
-						if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-							if secs, err := strconv.ParseFloat(retryAfter, 64); err == nil {
-								sleepDur = time.Duration(secs * float64(time.Second))
-							}
-						}
 						resp.Body.Close()
-						time.Sleep(sleepDur)
+						time.Sleep(100 * time.Millisecond)
 						continue
 					}
 					resp.Body.Close()
-
-					mu.Lock()
-					completed := sent >= messagesCount
-					mu.Unlock()
-
-					if completed {
-						close(stopSpam)
-						return
-					}
 				}
 			}(url)
 		}
 
-		// 3. الانتظار لمدة 5 ثواني بالضبط والويب هوكات ترسل خلالها بدون توقف
+		// الانتظار لمدة 5 ثواني بالضبط والرش شغال
 		time.Sleep(5 * time.Second)
 
-		// إيقاف الـ Goroutines الخاصة بالإرسال لهذه الدورة
+		// إيقاف الـ Goroutines الخاصة بالرش
 		close(stopSpam)
 		spamWg.Wait()
 
-		// 4. حذف الـ 5 ويب هوكات الحالية فوراً
+		// 3. حذف الـ 5 ويب هوكات الحالية فوراً
 		var deleteWg sync.WaitGroup
 		for _, url := range activeURLs {
 			deleteWg.Add(1)
@@ -450,9 +440,16 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		}
 		deleteWg.Wait()
 
-		// فاصل قصير جداً قبل بدء الدورة التالية (إن لم يكتمل العدد)
-		time.Sleep(200 * time.Millisecond)
+		// 4. (الجزئية الصريحة): التحقق من اكتمال العدد، وإذا لم يكتمل يتم استدعاء دالة الإنشاء صراحة لعمل 5 ويب هوكات جديدة
+		mu.Lock()
+		completed := sent >= messagesCount
+		mu.Unlock()
+
+		if !completed {
+			time.Sleep(200 * time.Millisecond)
+			activeURLs = createNewWebhooks() // <--- أمر صريح بإنشاء 5 ويب هوكات جديدة بعد الحذف
+		}
 	}
 
-	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب بالكامل بنجاح من خلال دورات الويب هوكات المستمرة!")
+	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب بالكامل بنجاح من خلال دورات الويب هوكات الصريحة!")
 }
