@@ -69,7 +69,7 @@ func main() {
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك مع نظام Rate Limit الذكي من ديسكورد",
+		Description: "سبام ويب هوك بنظام الدورات (5 ويب هوكات -> رسائل -> انتظار 5 ثواني -> حذف -> تكرار)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -92,7 +92,7 @@ func main() {
 			{
 				Type:        discordgo.ApplicationCommandOptionInteger,
 				Name:        "messages_count",
-				Description: "عدد الرسائل الإجمالي للسبام",
+				Description: "عدد الرسائل الإجمالي المطلوب",
 				Required:    true,
 			},
 		},
@@ -154,7 +154,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم بدء عملية سبام الويب هوكات بنجاح...",
+					Content: "🚀 تم بدء عملية سبام الويب هوكات (بالدورات المستمرة)...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -301,7 +301,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 					msgResp.Body.Close()
 				}
 			}
-		}(chID)
+		}(cID)
 	}
 }
 
@@ -311,127 +311,136 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		"Content-Type":  "application/json",
 	}
 
-	s.ChannelMessageSend(channelID, "🔄 جاري إنشاء 5 ويب هوكات للسبام...")
-
-	var activeURLs []string
-	var createWg sync.WaitGroup
+	sent := 0
 	var mu sync.Mutex
+	cycle := 1
 
-	for i := 0; i < 5; i++ {
-		createWg.Add(1)
-		go func() {
-			defer createWg.Done()
-			payload, _ := json.Marshal(map[string]string{"name": webhookName})
-			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(payload))
-			for k, v := range headers {
-				req.Header.Set(k, v)
-			}
+	// حلقة مستمرة تدور حتى يتم إرسال العدد الإجمالي المطلوب بالكامل عبر عدة دورات
+	for sent < messagesCount {
+		// 1. إنشاء 5 ويب هوكات في كل دورة
+		var activeURLs []string
+		var createWg sync.WaitGroup
 
-			resp, err := client.Do(req)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-				var wh map[string]interface{}
-				if err := json.NewDecoder(resp.Body).Decode(&wh); err == nil {
-					if id, ok := wh["id"].(string); ok {
-						if tkn, ok := wh["token"].(string); ok {
-							url := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tkn)
-							mu.Lock()
-							activeURLs = append(activeURLs, url)
-							mu.Unlock()
-						}
-					}
+		for i := 0; i < 5; i++ {
+			createWg.Add(1)
+			go func() {
+				defer createWg.Done()
+				payload, _ := json.Marshal(map[string]string{"name": webhookName})
+				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(payload))
+				for k, v := range headers {
+					req.Header.Set(k, v)
 				}
-			}
-		}()
-	}
-	createWg.Wait()
 
-	if len(activeURLs) == 0 {
-		s.ChannelMessageSend(channelID, "⚠️ فشل إنشاء الويب هوكات.")
-		return
-	}
+				resp, err := client.Do(req)
+				if err != nil {
+					return
+				}
+				defer resp.Body.Close()
 
-	s.ChannelMessageSend(channelID, fmt.Sprintf("🚀 جاري إرسال %d رسالة بنظام توقيت ديسكورد الذكي...", messagesCount))
-
-	perWebhook := messagesCount / len(activeURLs)
-	remainder := messagesCount % len(activeURLs)
-
-	var spamWg sync.WaitGroup
-	for idx, url := range activeURLs {
-		spamWg.Add(1)
-		targetCount := perWebhook
-		if idx == 0 {
-			targetCount += remainder
-		}
-
-		go func(whURL string, count int) {
-			defer spamWg.Done()
-			for m := 0; m < count; m++ {
-				for {
-					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-					// استخدام ?wait=true لتأكيد الاستلام وقراءة وقت الانتظار بدقة من ديسكورد
-					req, _ := http.NewRequest("POST", whURL+"?wait=true", bytes.NewBuffer(msgPayload))
-					req.Header.Set("Content-Type", "application/json")
-
-					resp, err := client.Do(req)
-					if err != nil {
-						time.Sleep(100 * time.Millisecond)
-						continue
-					}
-
-					// إذا تم إرسال الرسالة بنجاح تام
-					if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-						resp.Body.Close()
-						break // انتقل للرسالة التالية
-					}
-
-					// إذا حصلت على Rate Limit (كود 429)، اقرأ الوقت اللي يطلبه ديسكورد بالظبط
-					if resp.StatusCode == 429 {
-						retryAfterStr := resp.Header.Get("Retry-After")
-						resp.Body.Close()
-
-						sleepDuration := 1 * time.Second // احتياطي لو ما رجع الهيدر
-						if retryAfterStr != "" {
-							if seconds, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-								// ديسكورد أحياناً يرجع الثواني بشكل عشري (مثل 1.2 ثانية)
-								sleepDuration = time.Duration(seconds * float64(time.Second))
+				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+					var wh map[string]interface{}
+					if err := json.NewDecoder(resp.Body).Decode(&wh); err == nil {
+						if id, ok := wh["id"].(string); ok {
+							if tkn, ok := wh["token"].(string); ok {
+								url := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tkn)
+								mu.Lock()
+								activeURLs = append(activeURLs, url)
+								mu.Unlock()
 							}
 						}
-						// انتظر بالضبط الفترة اللي حددها ديسكورد ولا دقيقة زيادة
-						time.Sleep(sleepDuration)
-						continue // أعد المحاولة بعد انقضاء الوقت المطلوب بالضبط
 					}
-
-					resp.Body.Close()
-					time.Sleep(200 * time.Millisecond)
-					break
 				}
-			}
-		}(url, targetCount)
+			}()
+		}
+		createWg.Wait()
+
+		if len(activeURLs) == 0 {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		// 2. إرسال الرسائل عبر الـ 5 ويب هوكات المتاحة في هذه الدورة
+		var spamWg sync.WaitGroup
+		for _, url := range activeURLs {
+			spamWg.Add(1)
+			go func(whURL string) {
+				defer spamWg.Done()
+				// كل ويب هوك يرسل حزمة مصغرة داخل هذه الدورة لين يكتمل العدد الكلي أو تتعبى الدورة
+				for {
+					mu.Lock()
+					if sent >= messagesCount {
+						mu.Unlock()
+						break
+					}
+					sent++
+					mu.Unlock()
+
+					// محاولة إرسال الرسالة مع احترام Rate Limit حق ديسكورد الذكي
+					for {
+						msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+						req, _ := http.NewRequest("POST", whURL+"?wait=true", bytes.NewBuffer(msgPayload))
+						req.Header.Set("Content-Type", "application/json")
+
+						resp, err := client.Do(req)
+						if err != nil {
+							time.Sleep(100 * time.Millisecond)
+							continue
+						}
+
+						if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+							resp.Body.Close()
+							break
+						}
+
+						if resp.StatusCode == 429 {
+							retryAfterStr := resp.Header.Get("Retry-After")
+							resp.Body.Close()
+
+							sleepDuration := 1 * time.Second
+							if retryAfterStr != "" {
+								if seconds, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
+									sleepDuration = time.Duration(seconds * float64(time.Second))
+								}
+							}
+							time.Sleep(sleepDuration)
+							continue
+						}
+
+						resp.Body.Close()
+						break
+					}
+					// نطلع من حبة الـ for الداخلية عشان ما يستلم الويب هوك الواحد كل الشغل وتخلص الدورة بسرعة
+					break 
+				}
+			}(url)
+		}
+		spamWg.Wait()
+
+		// 3. الانتظار 5 ثواني بالضبط بعد إرسال الرسائل وقبل الحذف
+		time.Sleep(5 * time.Second)
+
+		// 4. حذف الويب هوكات حق هذه الدورة
+		var deleteWg sync.WaitGroup
+		for _, url := range activeURLs {
+			deleteWg.Add(1)
+			go func(whURL string) {
+				defer deleteWg.Done()
+				req, _ := http.NewRequest("DELETE", whURL, nil)
+				resp, err := client.Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}(url)
+		}
+		deleteWg.Wait()
+
+		// إذا وصلنا للعدد المطلوب نوقف اللوب نهائياً
+		if sent >= messagesCount {
+			break
+		}
+
+		cycle++
 	}
 
-	// انتظار قاطع لا يعطي إشعار الاكتمال إلا بعد انتهاء آخر رسالة تماماً
-	spamWg.Wait()
-
-	s.ChannelMessageSend(channelID, "⏳ جاري حذف الويب هوكات وتنظيف المكان...")
-
-	var deleteWg sync.WaitGroup
-	for _, url := range activeURLs {
-		deleteWg.Add(1)
-		go func(whURL string) {
-			defer deleteWg.Done()
-			req, _ := http.NewRequest("DELETE", whURL, nil)
-			resp, err := client.Do(req)
-			if err == nil {
-				resp.Body.Close()
-			}
-		}(url)
-	}
-	deleteWg.Wait()
-
-	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب تماماً وبدون أي نقص!")
+	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب تماماً عبر دورات الويب هوكات وبدون أي نقص!")
 }
