@@ -315,7 +315,6 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 	cycle := 1
 
 	for sent < messagesCount {
-		// إرسال رسالة داخل الروم بالتفاصيل عشان تعرف وش قاعد يصير بدون ما تفتح رايلواي
 		s.ChannelMessageSend(channelID, fmt.Sprintf("🔄 [الدورة %d] جاري إنشاء 5 ويب هوكات...", cycle))
 
 		var activeURLs []string
@@ -339,7 +338,7 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 
 				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
 					var wh map[string]interface{}
-					if json.NewDecoder(resp.Body).Decode(&wh) == nil {
+					if err := json.NewDecoder(resp.Body).Decode(&wh); err == nil {
 						if id, ok := wh["id"].(string); ok {
 							if tkn, ok := wh["token"].(string); ok {
 								url := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tkn)
@@ -355,58 +354,50 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		createWg.Wait()
 
 		if len(activeURLs) == 0 {
-			s.ChannelMessageSend(channelID, "⚠️ لم يتم إنشاء أي ويب هوك، جاري إعادة المحاولة بعد ثانية...")
+			s.ChannelMessageSend(channelID, "⚠️ فشل إنشاء الويب هوكات، إعادة المحاولة...")
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		s.ChannelMessageSend(channelID, fmt.Sprintf("🚀 بدأ رش الرسائل لمدة 5 ثوانٍ (المرسل حتى الآن: %d/%d)", sent, messagesCount))
+		s.ChannelMessageSend(channelID, fmt.Sprintf("🚀 بدأ إرسال الرسائل... (المتبقي: %d)", messagesCount-sent))
 
-		deadline := time.Now().Add(5 * time.Second)
 		var spamWg sync.WaitGroup
-
-		for time.Now().Before(deadline) {
-			mu.Lock()
-			if sent >= messagesCount {
-				mu.Unlock()
-				break
-			}
-			mu.Unlock()
-
-			for _, url := range activeURLs {
-				mu.Lock()
-				if sent >= messagesCount {
+		for _, url := range activeURLs {
+			spamWg.Add(1)
+			go func(whURL string) {
+				defer spamWg.Done()
+				for {
+					mu.Lock()
+					if sent >= messagesCount {
+						mu.Unlock()
+						break
+					}
+					sent++
 					mu.Unlock()
-					break
-				}
-				mu.Unlock()
 
-				spamWg.Add(1)
-				go func(whURL string) {
-					defer spamWg.Done()
 					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 					req, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
 					req.Header.Set("Content-Type", "application/json")
 
 					resp, err := client.Do(req)
-					if err == nil {
-						if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent {
-							mu.Lock()
-							sent++
-							mu.Unlock()
-						}
-						resp.Body.Close()
+					if err != nil {
+						time.Sleep(50 * time.Millisecond)
+						continue
 					}
-				}(url)
-			}
-			time.Sleep(30 * time.Millisecond)
+					
+					if resp.StatusCode == 429 {
+						time.Sleep(500 * time.Millisecond)
+					}
+					resp.Body.Close()
+					time.Sleep(20 * time.Millisecond)
+				}
+			}(url)
 		}
 		spamWg.Wait()
 
-		s.ChannelMessageSend(channelID, fmt.Sprintf("⏳ انتهت الـ 5 ثوانٍ. جاري الانتظار 3 ثوانٍ قبل الحذف... (إجمالي المرسل: %d)", sent))
+		s.ChannelMessageSend(channelID, "⏳ انتظار 3 ثوانٍ قبل الحذف...")
 		time.Sleep(3 * time.Second)
 
-		s.ChannelMessageSend(channelID, "🗑️ جاري حذف الـ 5 ويب هوكات...")
 		var deleteWg sync.WaitGroup
 		for _, url := range activeURLs {
 			deleteWg.Add(1)
@@ -421,7 +412,6 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		}
 		deleteWg.Wait()
 
-		s.ChannelMessageSend(channelID, "✅ تم الحذف بنجاح. الانتقال للدورة التالية...")
 		cycle++
 	}
 	s.ChannelMessageSend(channelID, "🎉 اكتمل العدد المطلوب تماماً!")
