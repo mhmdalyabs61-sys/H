@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -68,7 +69,7 @@ func main() {
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك (ينشئ 5 ويب هوكات ويوزع الرسائل بدقة)",
+		Description: "سبام ويب هوك مع نظام Rate Limit الذكي من ديسكورد",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -354,7 +355,7 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		return
 	}
 
-	s.ChannelMessageSend(channelID, fmt.Sprintf("🚀 جاري إرسال %d رسالة موزعة على الويب هوكات...", messagesCount))
+	s.ChannelMessageSend(channelID, fmt.Sprintf("🚀 جاري إرسال %d رسالة بنظام توقيت ديسكورد الذكي...", messagesCount))
 
 	perWebhook := messagesCount / len(activeURLs)
 	remainder := messagesCount % len(activeURLs)
@@ -370,26 +371,50 @@ func executeWebhookSpamLoop(s *discordgo.Session, token, channelID, webhookName,
 		go func(whURL string, count int) {
 			defer spamWg.Done()
 			for m := 0; m < count; m++ {
-				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-				req, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
-				req.Header.Set("Content-Type", "application/json")
+				for {
+					msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+					// استخدام ?wait=true لتأكيد الاستلام وقراءة وقت الانتظار بدقة من ديسكورد
+					req, _ := http.NewRequest("POST", whURL+"?wait=true", bytes.NewBuffer(msgPayload))
+					req.Header.Set("Content-Type", "application/json")
 
-				resp, err := client.Do(req)
-				if err != nil {
-					time.Sleep(50 * time.Millisecond)
-					continue
-				}
+					resp, err := client.Do(req)
+					if err != nil {
+						time.Sleep(100 * time.Millisecond)
+						continue
+					}
 
-				if resp.StatusCode == 429 {
-					time.Sleep(1000 * time.Millisecond)
+					// إذا تم إرسال الرسالة بنجاح تام
+					if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+						resp.Body.Close()
+						break // انتقل للرسالة التالية
+					}
+
+					// إذا حصلت على Rate Limit (كود 429)، اقرأ الوقت اللي يطلبه ديسكورد بالظبط
+					if resp.StatusCode == 429 {
+						retryAfterStr := resp.Header.Get("Retry-After")
+						resp.Body.Close()
+
+						sleepDuration := 1 * time.Second // احتياطي لو ما رجع الهيدر
+						if retryAfterStr != "" {
+							if seconds, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
+								// ديسكورد أحياناً يرجع الثواني بشكل عشري (مثل 1.2 ثانية)
+								sleepDuration = time.Duration(seconds * float64(time.Second))
+							}
+						}
+						// انتظر بالضبط الفترة اللي حددها ديسكورد ولا دقيقة زيادة
+						time.Sleep(sleepDuration)
+						continue // أعد المحاولة بعد انقضاء الوقت المطلوب بالضبط
+					}
+
+					resp.Body.Close()
+					time.Sleep(200 * time.Millisecond)
+					break
 				}
-				resp.Body.Close()
-				time.Sleep(15 * time.Millisecond)
 			}
 		}(url, targetCount)
 	}
 
-	// انتظار حقيقي وقاطع: مستحيل يكمل لين تنتهي آخر رسالة مرسلة فعلياً
+	// انتظار قاطع لا يعطي إشعار الاكتمال إلا بعد انتهاء آخر رسالة تماماً
 	spamWg.Wait()
 
 	s.ChannelMessageSend(channelID, "⏳ جاري حذف الويب هوكات وتنظيف المكان...")
