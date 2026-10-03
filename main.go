@@ -316,8 +316,7 @@ func createFiveWebhooks(token, channelID, webhookName string) []string {
 	}
 
 	var activeURLs []string
-	
-	// إنشاء 5 ويب هوكات صراحة (واحد تلو الآخر أو متزامن مع مهلة بسيطة لضمان نجاحها)
+
 	for i := 0; i < 5; i++ {
 		payload, _ := json.Marshal(map[string]string{"name": webhookName + fmt.Sprintf("-%d", i+1)})
 		req, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(payload))
@@ -343,7 +342,6 @@ func createFiveWebhooks(token, channelID, webhookName string) []string {
 			}
 		}
 		resp.Body.Close()
-		// فاصل زمني بسيط جداً بين كل ويب هوك والثاني عشان ديسكورد ما يعطيني باند مؤقت
 		time.Sleep(40 * time.Millisecond)
 	}
 
@@ -377,7 +375,6 @@ func burstSendForFiveSeconds(urls []string, messageContent string, sentCounter *
 	for _, url := range urls {
 		wg.Add(1)
 		go func(whURL string) {
-			defer wg.GetDoneIfPossible() // أمان إضافي
 			defer wg.Done()
 			for {
 				select {
@@ -425,7 +422,6 @@ func burstSendForFiveSeconds(urls []string, messageContent string, sentCounter *
 
 // الدالة الصريحة للتنفيذ المستمر (إنشاء 5 ويب هوكات -> إرسال 5 ثواني -> حذف -> إنشاء جديد بعد الحذف فوراً)
 func executeWebhookSpamStep(s *discordgo.Session, token, channelID, webhookName, messageContent string, messagesCount int, sentCounter *int, mu *sync.Mutex) {
-	// التحقق هل وصلنا للعدد المطلوب قبل البدء
 	mu.Lock()
 	if *sentCounter >= messagesCount {
 		mu.Unlock()
@@ -434,7 +430,6 @@ func executeWebhookSpamStep(s *discordgo.Session, token, channelID, webhookName,
 	}
 	mu.Unlock()
 
-	// 1. أمر صريح: إنشاء 5 ويب هوكات
 	urls := createFiveWebhooks(token, channelID, webhookName)
 	if len(urls) == 0 {
 		time.Sleep(200 * time.Millisecond)
@@ -442,13 +437,10 @@ func executeWebhookSpamStep(s *discordgo.Session, token, channelID, webhookName,
 		return
 	}
 
-	// 2. أمر صريح: إرسال مكثف لمدة 5 ثواني
 	burstSendForFiveSeconds(urls, messageContent, sentCounter, messagesCount, mu)
 
-	// 3. أمر صريح: حذف الـ 5 ويب هوكات فوراً
 	deleteFiveWebhooks(token, urls)
 
-	// 4. فحص صريح بعد الحذف: هل اكتمل العدد؟
 	mu.Lock()
 	completed := *sentCounter >= messagesCount
 	mu.Unlock()
@@ -458,7 +450,6 @@ func executeWebhookSpamStep(s *discordgo.Session, token, channelID, webhookName,
 		return
 	}
 
-	// 5. أمر صريح ومباشر: إذا لم يكتمل العدد، قم بإنشاء 5 ويب هوكات جديدة بعد الحذف واستمر فوراً
 	time.Sleep(100 * time.Millisecond)
 	executeWebhookSpamStep(s, token, channelID, webhookName, messageContent, messagesCount, sentCounter, mu)
 }
