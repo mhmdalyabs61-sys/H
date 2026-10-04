@@ -451,7 +451,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 				msgResp, err := httpClient.Do(msgReq)
 				if err != nil {
-					time.Sleep(50 * time.Millisecond)
+					time.Sleep(20 * time.Millisecond)
 					continue
 				}
 
