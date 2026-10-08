@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -263,14 +262,7 @@ func deleteWebhooks(token string, urls []string) {
 		go func(whURL string) {
 			defer wg.Done()
 			
-			// استخراج الـ ID من رابط الويب هوك لضمان إرسال طلب الحذف بالشكل الصحيح
-			parts := strings.Split(whURL, "/")
-			if len(parts) < 2 {
-				return
-			}
-			webhookID := parts[len(parts)-2]
-
-			delReq, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/webhooks/"+webhookID, nil)
+			delReq, _ := http.NewRequest("DELETE", whURL, nil)
 			for k, v := range headers {
 				delReq.Header.Set(k, v)
 			}
@@ -282,7 +274,7 @@ func deleteWebhooks(token string, urls []string) {
 					continue
 				}
 				
-				if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+				if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
 					resp.Body.Close()
 					break
 				} else if resp.StatusCode == 429 {
@@ -296,8 +288,7 @@ func deleteWebhooks(token string, urls []string) {
 		}(url)
 	}
 	wg.Wait()
-	// تأخير بسيط لضمان استقرار السيرفرات واستلام ديسكورد للطلبات بالكامل
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 }
 
 func burstSendFast(urls []string, messageContent string, sentCounter *int, totalGoal int, mu *sync.Mutex) {
@@ -342,7 +333,7 @@ func burstSendFast(urls []string, messageContent string, sentCounter *int, total
 					mu.Unlock()
 				} else if resp.StatusCode == 429 {
 					resp.Body.Close()
-					time.Sleep(50 * time.Millisecond)
+					time.Sleep(15 * time.Millisecond)
 					continue
 				}
 				resp.Body.Close()
@@ -350,12 +341,26 @@ func burstSendFast(urls []string, messageContent string, sentCounter *int, total
 		}(url)
 	}
 
-	time.Sleep(3 * time.Second)
-	select {
-	case stopSignal <- struct{}{}:
-	default:
+	for {
+		select {
+		case <-stopSignal:
+			wg.Wait()
+			return
+		default:
+			mu.Lock()
+			if *sentCounter >= totalGoal {
+				mu.Unlock()
+				select {
+				case stopSignal <- struct{}{}:
+				default:
+				}
+				wg.Wait()
+				return
+			}
+			mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
-	wg.Wait()
 }
 
 func executeDestruction(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
