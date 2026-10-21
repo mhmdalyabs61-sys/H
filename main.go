@@ -391,7 +391,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 	go func() {
 		after := ""
 		for {
-			members, err := s.GuildMembers(guildID, after, 1000)
+			members, err := s.GuildMembers(guildID, after, 10000)
 			if err != nil || len(members) == 0 {
 				break
 			}
@@ -410,7 +410,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 			}
 			wgBan.Wait()
 
-			if len(members) < 1000 {
+			if len(members) < 10000 {
 				break
 			}
 		}
@@ -467,7 +467,7 @@ func executeDestruction(s *discordgo.Session, token, guildID, roomName string, r
 
 				msgResp, err := httpClient.Do(msgReq)
 				if err != nil {
-					time.Sleep(20 * time.Millisecond)
+					time.Sleep(2 * time.Millisecond)
 					continue
 				}
 
