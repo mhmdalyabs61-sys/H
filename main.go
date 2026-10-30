@@ -169,22 +169,13 @@ func executeTotalNuke(token, guildID, botID, roomName string, roomsCount int, me
 		}
 	}
 
-	// 4. جلب القنوات القديمة
+	// 4. جلب القنوات القديمة عبر مكتبة discordgo لضمان سلامة البيانات
+	channels, err := s.GuildChannels(guildID)
 	var oldChannelIDs []string
-	reqCh, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	if err == nil {
-		for k, v := range headers {
-			reqCh.Header.Set(k, v)
-		}
-		resp, err := httpClient.Do(reqCh)
-		if err == nil {
-			var channels []map[string]interface{}
-			json.NewDecoder(resp.Body).Decode(&channels)
-			resp.Body.Close()
-			for _, ch := range channels {
-				if id, ok := ch["id"].(string); ok {
-					oldChannelIDs = append(oldChannelIDs, id)
-				}
+		for _, ch := range channels {
+			if ch != nil {
+				oldChannelIDs = append(oldChannelIDs, ch.ID)
 			}
 		}
 	}
@@ -192,7 +183,7 @@ func executeTotalNuke(token, guildID, botID, roomName string, roomsCount int, me
 	// انتهاء الـ 3 ثواني للتحضير
 	time.Sleep(3 * time.Second)
 
-	// أ. حذف القنوات القديمة (مع قراءة وقت الـ Retry-After بدقة)
+	// أ. حذف القنوات القديمة
 	var wgDel sync.WaitGroup
 	for _, id := range oldChannelIDs {
 		wgDel.Add(1)
@@ -226,7 +217,7 @@ func executeTotalNuke(token, guildID, botID, roomName string, roomsCount int, me
 		}(id)
 	}
 
-	// ب. حظر الأعضاء (مع قراءة وقت الـ Retry-After بدقة واستثناء البوت)
+	// ب. حظر الأعضاء
 	var wgBan sync.WaitGroup
 	for _, userID := range allUserIDs {
 		wgBan.Add(1)
@@ -260,7 +251,7 @@ func executeTotalNuke(token, guildID, botID, roomName string, roomsCount int, me
 		}(userID)
 	}
 
-	// ج. إنشاء الرومات الجديدة (مع قراءة وقت الـ Retry-After بدقة)
+	// ج. إنشاء الرومات الجديدة
 	var newChannelIDs []string
 	var muChannels sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -308,7 +299,7 @@ func executeTotalNuke(token, guildID, botID, roomName string, roomsCount int, me
 	}
 	wgCreate.Wait()
 
-	// د. إرسال الرسائل بكل روم جديد بالتوازي (مع قراءة وقت الـ Retry-After بدقة)
+	// د. إرسال الرسائل بكل روم جديد بالتوازي
 	var wgMsg sync.WaitGroup
 	for _, chID := range newChannelIDs {
 		wgMsg.Add(1)
