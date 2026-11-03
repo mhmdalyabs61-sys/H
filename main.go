@@ -241,7 +241,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 				break
 			}
 		}(id, idx)
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	wgDel.Wait()
 
@@ -281,7 +281,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 
 		// تطبيق الراحة (100 ميلي ثانية) لكل 1000 عضو يتم معالجتهم
 		if (idx+1)%1000 == 0 {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(70 * time.Millisecond)
 		}
 	}
 	wgBan.Wait()
@@ -332,7 +332,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 				break
 			}
 		}(payload, idx)
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	wgCreate.Wait()
 
@@ -369,7 +369,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 					msgResp.Body.Close()
 					break
 				}
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(5 * time.Millisecond)
 			}
 		}(chID, idx)
 	}
