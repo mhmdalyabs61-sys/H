@@ -43,7 +43,7 @@ func main() {
 	cmdNuke := "nuke"
 	commandNuke := &discordgo.ApplicationCommand{
 		Name:        cmdNuke,
-		Description: "أمر التجربة بالسرعات المخصصة والراحة المحددة للأعضاء",
+		Description: "nuke server",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
