@@ -1,16 +1,13 @@
 package main
-
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,6 +15,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 )
+
 
 var massiveProxyPool = []string{
 	"103.152.112.5:80",
