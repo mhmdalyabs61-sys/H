@@ -5,12 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -245,10 +243,6 @@ func filterActiveProxies(rawProxies []string) []*http.Client {
 					MaxIdleConns:        500,
 					MaxIdleConnsPerHost: 500,
 					IdleConnTimeout:     30 * time.Second,
-					DialContext: (&net.Dialer{
-						Timeout:   1 * time.Second,
-						KeepAlive: 15 * time.Second,
-					}).DialContext,
 				},
 				Timeout: 1500 * time.Millisecond,
 			}
@@ -449,7 +443,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 }
 
-// محرك النسخ باستخدام التوكن الشخصي (User Token) لقراءة المصدر وتوكنات البوتات للبناء
 func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies []string, guildID, sourceGuildID string) {
 	if len(tokens) == 0 || userToken == "" {
 		return
@@ -461,7 +454,6 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 
 	client := clients[0]
 
-	// دالة مساعدة لطلبات الـ User Token لقراءة السيرفر المصدر
 	getSourceData := func(endpoint string, target interface{}) error {
 		req, err := http.NewRequest("GET", "https://discord.com/api/v10"+endpoint, nil)
 		if err != nil {
@@ -483,7 +475,6 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 		return json.NewDecoder(resp.Body).Decode(target)
 	}
 
-	// 1. حذف الرومات الحالية في السيرفر المستهدف
 	var targetChannels []map[string]interface{}
 	reqChannels, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	reqChannels.Header.Set("Authorization", "Bot "+tokens[0])
@@ -503,15 +494,8 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 		}
 	}
 
-	// 2. جلب ونسخ الرتب (Roles) من المصدر
 	var sourceRoles []map[string]interface{}
 	if err := getSourceData("/guilds/"+sourceGuildID+"/roles", &sourceRoles); err == nil {
-		sort.Slice(sourceRoles, func(i, j int) bool {
-			posI, _ := sourceRoles[i]["position"].(float64)
-			posJ, _ := sourceRoles[j]["position"].(float64)
-			return posI < posJ
-		})
-
 		for _, r := range sourceRoles {
 			name, _ := r["name"].(string)
 			if name == "@example" || name == "@everyone" {
@@ -541,7 +525,6 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 		}
 	}
 
-	// 3. جلب رومات المصدر بالتوكن الشخصي
 	var sourceChannels []map[string]interface{}
 	if err := getSourceData("/guilds/"+sourceGuildID+"/channels", &sourceChannels); err != nil {
 		return
@@ -552,7 +535,7 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 
 	for _, ch := range sourceChannels {
 		chType, _ := ch["type"].(float64)
-		if int(chType) == 4 { // Category
+		if int(chType) == 4 {
 			categories = append(categories, ch)
 		} else {
 			channels = append(channels, ch)
@@ -561,7 +544,6 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 
 	categoryMap := make(map[string]string)
 
-	// إنشاء الفئات
 	for _, cat := range categories {
 		p, _ := json.Marshal(map[string]interface{}{
 			"name":                  cat["name"],
@@ -590,7 +572,6 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 		}
 	}
 
-	// إنشاء الرومات وربطها بالفئات والصلاحيات
 	for _, ch := range channels {
 		parentID := ""
 		if pID, ok := ch["parent_id"].(string); ok && pID != "" {
