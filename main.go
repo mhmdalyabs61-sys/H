@@ -64,7 +64,7 @@ func main() {
 
 	cmdNuke := &discordgo.ApplicationCommand{
 		Name:        "nuke1",
-		Description: "أمر التدمير: حذف، سبام سريع، وخيار تفعيل الباند",
+		Description: "أمر التدمير: حذف، سبام سريع جداً، وخيار تفعيل الباند",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionBoolean,
@@ -75,7 +75,7 @@ func main() {
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "room_name",
-				Description: "اسم الرومات",
+				Description: "اسم الرومات الجديدة",
 				Required:    true,
 			},
 			{
@@ -87,13 +87,13 @@ func main() {
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "message_content",
-				Description: "محتوى الرسالة",
+				Description: "محتوى رسالة السبام",
 				Required:    true,
 			},
 			{
 				Type:        discordgo.ApplicationCommandOptionInteger,
 				Name:        "messages_count",
-				Description: "عدد الرسائل",
+				Description: "عدد الرسائل بكل روم",
 				Required:    true,
 			},
 			{
@@ -107,7 +107,7 @@ func main() {
 
 	cmdClone := &discordgo.ApplicationCommand{
 		Name:        "clone",
-		Description: "أمر النسخ الشامل: رتب، رومات، وصلاحيات بنفس الترتيب تماماً",
+		Description: "أمر النسخ الشامل: رتب، رومات، وفئات بنفس الترتيب والصلاحيات",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -340,7 +340,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		return false
 	}
 
-	// 1. حذف الرومات القديمة بسرعة
+	// 1. حذف الرومات القديمة
 	chQueue := make(chan string, len(oldChannelIDs))
 	for _, id := range oldChannelIDs {
 		chQueue <- id
@@ -359,7 +359,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgDel.Wait()
 
-	// 2. باند الأعضاء بسرعة
+	// 2. الباند الجماعي
 	if includeBan && len(allUserIDs) > 0 {
 		userQueue := make(chan string, len(allUserIDs))
 		for _, uid := range allUserIDs {
@@ -380,7 +380,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		wgBan.Wait()
 	}
 
-	// 3. إنشاء الرومات الجديدة بسرعة صاروخية
+	// 3. إنشاء الرومات الجديدة
 	var newChannelIDs []string
 	var muChannels sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -424,7 +424,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgCreate.Wait()
 
-	// 4. إرسال الرسائل (معدل ليكون أسرع بكثير عبر توازي عالي لكل روم)
+	// 4. السبام السريع جداً للرسائل
 	if len(newChannelIDs) > 0 && messagesCount > 0 {
 		var wgMsg sync.WaitGroup
 		for i, chID := range newChannelIDs {
@@ -432,7 +432,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 			go func(cID string, wIdx int) {
 				defer wgMsg.Done()
 				var wgSubMsg sync.WaitGroup
-				// إرسال الرسائل بشكل متوازي داخل الروم الواحد لزيادة السرعة
 				for m := 0; m < messagesCount; m++ {
 					wgSubMsg.Add(1)
 					go func(msgIndex int) {
