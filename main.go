@@ -478,16 +478,14 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 	var targetChannels []map[string]interface{}
 	reqChannels, _ := http.NewRequest("GET", "https://discord.com/api/v10/guilds/"+guildID+"/channels", nil)
 	reqChannels.Header.Set("Authorization", "Bot "+tokens[0])
-	respCh, err := client.Do(reqChannels)
-	if err == nil {
-		json.NewDecoder(respCh.Body).Decode(&targetChannels)
+	if respCh, err := client.Do(reqChannels); err == nil {
+		_ = json.NewDecoder(respCh.Body).Decode(&targetChannels)
 		respCh.Body.Close()
 		for _, ch := range targetChannels {
 			if id, ok := ch["id"].(string); ok {
 				reqDel, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/channels/"+id, nil)
 				reqDel.Header.Set("Authorization", "Bot "+tokens[0])
-				respDel, err := client.Do(reqDel)
-				if err == nil {
+				if respDel, err := client.Do(reqDel); err == nil {
 					respDel.Body.Close()
 				}
 			}
@@ -518,8 +516,7 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 			reqRole, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/roles", bytes.NewBuffer(body))
 			reqRole.Header.Set("Authorization", "Bot "+tokens[0])
 			reqRole.Header.Set("Content-Type", "application/json")
-			respRole, err := client.Do(reqRole)
-			if err == nil {
+			if respRole, err := client.Do(reqRole); err == nil {
 				respRole.Body.Close()
 			}
 		}
