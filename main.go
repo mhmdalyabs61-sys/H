@@ -462,9 +462,9 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 		req.Header.Set("Authorization", userToken)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
-		resp, err := client.Do(req)
-		if err != nil {
-			return err
+		resp, clientErr := client.Do(req)
+		if clientErr != nil {
+			return clientErr
 		}
 		defer resp.Body.Close()
 
@@ -485,7 +485,7 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 			if id, ok := ch["id"].(string); ok {
 				reqDel, _ := http.NewRequest("DELETE", "https://discord.com/api/v10/channels/"+id, nil)
 				reqDel.Header.Set("Authorization", "Bot "+tokens[0])
-				if respDel, err := client.Do(reqDel); err == nil {
+				if respDel, delErr := client.Do(reqDel); delErr == nil {
 					respDel.Body.Close()
 				}
 			}
@@ -516,7 +516,7 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 			reqRole, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/roles", bytes.NewBuffer(body))
 			reqRole.Header.Set("Authorization", "Bot "+tokens[0])
 			reqRole.Header.Set("Content-Type", "application/json")
-			if respRole, err := client.Do(reqRole); err == nil {
+			if respRole, roleErr := client.Do(reqRole); roleErr == nil {
 				respRole.Body.Close()
 			}
 		}
@@ -530,74 +530,72 @@ func executeUserTokenCloneEngine(tokens []string, userToken string, rawProxies [
 	var categories []map[string]interface{}
 	var channels []map[string]interface{}
 
-	for _, ch := range sourceChannels {
-		chType, _ := ch["type"].(float64)
-		if int(chType) == 4 {
-			categories = append(categories, ch)
-		} else {
-			channels = append(channels, ch)
-		}
-	}
+    for _, ch := range sourceChannels {
+        chType, _ := ch["type"].(float64)
+        if int(chType) == 4 {
+            categories = append(categories, ch)
+        } else {
+            channels = append(channels, ch)
+        }
+    }
 
-	categoryMap := make(map[string]string)
+    categoryMap := make(map[string]string)
 
-	for _, cat := range categories {
-		p, _ := json.Marshal(map[string]interface{}{
-			"name":                  cat["name"],
-			"type":                  cat["type"],
-			"permission_overwrites": cat["permission_overwrites"],
-			"position":              cat["position"],
-		})
+    for _, cat := range categories {
+        p, _ := json.Marshal(map[string]interface{}{
+            "name":                  cat["name"],
+            "type":                  cat["type"],
+            "permission_overwrites": cat["permission_overwrites"],
+            "position":              cat["position"],
+        })
 
-		req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(p))
-		req.Header.Set("Authorization", "Bot "+tokens[0])
-		req.Header.Set("Content-Type", "application/json")
+        req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(p))
+        req.Header.Set("Authorization", "Bot "+tokens[0])
+        req.Header.Set("Content-Type", "application/json")
 
-		resp, err := client.Do(req)
-		if err == nil && (resp.StatusCode == 200 || resp.StatusCode == 201) {
-			var res map[string]interface{}
-			if json.NewDecoder(resp.Body).Decode(&res) == nil {
-				if newID, ok := res["id"].(string); ok {
-					if oldID, ok2 := cat["id"].(string); ok2 {
-						categoryMap[oldID] = newID
-					}
-				}
-			}
-		}
-		if resp != nil {
-			resp.Body.Close()
-		}
-	}
+        if resp, catErr := client.Do(req); catErr == nil {
+            if resp.StatusCode == 200 || resp.StatusCode == 201 {
+                var res map[string]interface{}
+                if json.NewDecoder(resp.Body).Decode(&res) == nil {
+                    if newID, ok := res["id"].(string); ok {
+                        if oldID, ok2 := cat["id"].(string); ok2 {
+                            categoryMap[oldID] = newID
+                        }
+                    }
+                }
+            }
+            resp.Body.Close()
+        }
+    }
 
-	for _, ch := range channels {
-		parentID := ""
-		if pID, ok := ch["parent_id"].(string); ok && pID != "" {
-			if newP, exists := categoryMap[pID]; exists {
-				parentID = newP
-			}
-		}
+    for _, ch := range channels {
+        parentID := ""
+        if pID, ok := ch["parent_id"].(string); ok && pID != "" {
+            if newP, exists := categoryMap[pID]; exists {
+                parentID = newP
+            }
+        }
 
-		p, _ := json.Marshal(map[string]interface{}{
-			"name":                  ch["name"],
-			"type":                  ch["type"],
-			"topic":                 ch["topic"],
-			"nsfw":                  ch["nsfw"],
-			"rate_limit_per_user":   ch["rate_limit_per_user"],
-			"bitrate":               ch["bitrate"],
-			"user_limit":            ch["user_limit"],
-			"parent_id":             parentID,
-			"permission_overwrites": ch["permission_overwrites"],
-			"position":              ch["position"],
-		})
+        p, _ := json.Marshal(map[string]interface{}{
+            "name":                  ch["name"],
+            "type":                  ch["type"],
+            "topic":                 ch["topic"],
+            "nsfw":                  ch["nsfw"],
+            "rate_limit_per_user":   ch["rate_limit_per_user"],
+            "bitrate":               ch["bitrate"],
+            "user_limit":            ch["user_limit"],
+            "parent_id":             parentID,
+            "permission_overwrites": ch["permission_overwrites"],
+            "position":              ch["position"],
+        })
 
-		req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(p))
-		req.Header.Set("Authorization", "Bot "+tokens[0])
-		req.Header.Set("Content-Type", "application/json")
+        req, _ := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(p))
+        req.Header.Set("Authorization", "Bot "+tokens[0])
+        req.Header.Set("Content-Type", "application/json")
 
-		resp, err := client.Do(req)
-		if resp != nil {
-			resp.Body.Close()
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+        if resp, chErr := client.Do(req); chErr == nil {
+            resp.Body.Close()
+        }
+        time.Sleep(50 * time.Millisecond)
+    }
 }
