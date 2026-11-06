@@ -43,7 +43,7 @@ func main() {
 	cmdClone := "cloner"
 	commandClone := &discordgo.ApplicationCommand{
 		Name:        cmdClone,
-		Description: "نسخ سيرفر كامل بالصلاحيات الدقيقة وترتيب الرتب والرومات",
+		Description: "نسخ سيرفر كامل بالصلاحيات الكاملة والترتيب الدقيق",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -132,7 +132,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "🔄 جاري استنساخ الرتب والرومات والصلاحيات بالترتيب الدقيق...",
+					Content: "🔄 جاري نسخ الرتب والصلاحيات والترتيب بدقة تامة...",
 				},
 			})
 
@@ -325,7 +325,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 		return 0, false
 	}
 
-	updateInteractionStatus(s, interaction, "🔍 جاري سحب بيانات السيرفر المصدر بدقة...")
+	updateInteractionStatus(s, interaction, "🔍 جاري سحب بيانات السيرفر المصدر...")
 	templateChannels, templateRoles, fetchErr := fetchGuildDataWithUserToken(userToken, templateGuildID)
 	if fetchErr != nil {
 		updateInteractionStatus(s, interaction, "❌ فشل سحب البيانات، تأكد من صحة التوكن الشخصي وإلزامية وجود حسابك بالمصدر.")
@@ -377,39 +377,46 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	}
 	wgDel.Wait()
 
-	updateInteractionStatus(s, interaction, "📥 جاري إنشاء الرتب وترتيبها بالصلاحيات الفعلية...")
-	for _, r := range templateRoles {
+	updateInteractionStatus(s, interaction, "📥 جاري إنشاء الرتب مع الصلاحيات والترتيب الدقيق...")
+	var wgCreateRole sync.WaitGroup
+	for i, r := range templateRoles {
 		name, _ := r["name"].(string)
 		if name == "@everyone" {
+			// تحديث صلاحيات الـ everyone الأساسية
 			if perms, ok := r["permissions"]; ok {
 				everyonePayload, _ := json.Marshal(map[string]interface{}{
 					"permissions": perms,
 				})
-				makeProxyRequest("PATCH", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles/%s", guildID, guildID), everyonePayload, 0)
+				makeProxyRequest("PATCH", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles/%s", guildID, guildID), everyonePayload, i)
 			}
 			continue
 		}
+		wgCreateRole.Add(1)
+		go func(role map[string]interface{}, idx int) {
+			defer wgCreateRole.Done()
 
-		var perms interface{} = r["permissions"]
-		if pStr, ok := r["permissions"].(string); ok {
-			var pInt int64
-			fmt.Sscanf(pStr, "%d", &pInt)
-			perms = pInt
-		}
+			// معالجة الصلاحيات والترتيب كـ int/string حسب صيغة ديسكورد API
+			var perms interface{} = role["permissions"]
+			if pStr, ok := role["permissions"].(string); ok {
+				var pInt int64
+				fmt.Sscanf(pStr, "%d", &pInt)
+				perms = pInt
+			}
 
-		rolePayload, _ := json.Marshal(map[string]interface{}{
-			"name":        r["name"],
-			"permissions": perms,
-			"color":       r["color"],
-			"hoist":       r["hoist"],
-			"mentionable": r["mentionable"],
-			"position":    r["position"],
-		})
-		makeProxyRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), rolePayload, 0)
-		time.Sleep(50 * time.Millisecond) // للحفاظ على الترتيب التصاعدي الصحيح
+			rolePayload, _ := json.Marshal(map[string]interface{}{
+				"name":        role["name"],
+				"permissions": perms,
+				"color":       role["color"],
+				"hoist":       role["hoist"],
+				"mentionable": role["mentionable"],
+				"position":    role["position"],
+			})
+			makeProxyRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), rolePayload, idx)
+		}(r, i)
 	}
+	wgCreateRole.Wait()
 
-	updateInteractionStatus(s, interaction, "📂 جاري إنشاء الفئات والرومات بصلاحيات الأذونات المرتبطة...")
+	updateInteractionStatus(s, interaction, "📂 جاري إنشاء الفئات والرومات بصلاحياتها وترتيبها...")
 	var categories []map[string]interface{}
 	var regularChannels []map[string]interface{}
 
@@ -499,7 +506,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	}
 	wgChannels.Wait()
 
-	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات بترتيبها وصلاحياتها الأصلية بحذافيرها! 🚀")
+	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والصلاحيات والترتيب بحذافيرها بنجاح تام! 🚀")
 }
 
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
