@@ -137,7 +137,7 @@ func main() {
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "bot_tokens",
-				Description: "توكنات البوتات للإرسال (مفصولة بفاصلة)",
+				Description: "التوكنات الشخصية للإرسال (مفصولة بفاصلة)",
 				Required:    true,
 			},
 		},
@@ -623,10 +623,10 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-// دالة محرك إرسال الرسائل الخاصة (Mass DM) مع العداد الدقيق والدعم للتوكن الشخصي وسحب الأعضاء الخارجيين
+// دالة محرك إرسال الرسائل الخاصة (MassDM) باستخدام التوكن الشخصي للإرسال + ترجمة ومعالجة الأخطاء
 func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, userToken string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	if len(tokens) == 0 {
-		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكنات البوتات للإرسال.")
+		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال التوكنات الشخصية للإرسال.")
 		return
 	}
 
@@ -650,23 +650,45 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 
 		req, err := http.NewRequest("GET", urlStr, nil)
 		if err != nil {
-			break
+			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ خطأ إنشاء الطلب: %v", err))
+			return
 		}
 		if userToken != "" {
 			req.Header.Set("Authorization", userToken)
 		} else {
-			req.Header.Set("Authorization", "Bot "+tokens[0])
+			req.Header.Set("Authorization", tokens[0])
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 		resp, err := clientHTTP.Do(req)
 		if err != nil {
-			break
+			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ خطأ في الاتصال بالشبكة: %v", err))
+			return
 		}
 
 		if resp.StatusCode != 200 {
+			buf := new(bytes.Buffer)
+			buf.ReadFrom(resp.Body)
 			resp.Body.Close()
-			break
+
+			errorBody := buf.String()
+			var reasonArabic string
+
+			switch resp.StatusCode {
+			case 401:
+				reasonArabic = "غير مصرح (401): التوكن الشخصي غير صحيح أو منتهي الصلاحية."
+			case 403:
+				reasonArabic = "تم رفض الوصول (403): الحساب غير منضم للسيرفر أو ليس لديه الصلاحية."
+			case 404:
+				reasonArabic = "غير موجود (404): إيدي السيرفر المستهدف (Guild ID) خطأ أو غير موجود."
+			case 429:
+				reasonArabic = "تم حظر الطلبات مؤقتاً (429 Rate Limit): تجاوزت الحد المسموح من الطلبات."
+			default:
+				reasonArabic = fmt.Sprintf("خطأ غير معروف (كود %d): %s", resp.StatusCode, errorBody)
+			}
+
+			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ فشل سحب الأعضاء:\n%s", reasonArabic))
+			return
 		}
 
 		var members []map[string]interface{}
@@ -698,7 +720,7 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 	}
 
 	if len(allUserIDs) == 0 {
-		updateInteractionStatus(s, interaction, "❌ لم يتم العثور على أعضاء أو أن الإيدي خطأ/الصلاحية غير مسموحة.")
+		updateInteractionStatus(s, interaction, "❌ لم يتم العثور على أعضاء أو أن القائمة فارغة تماماً.")
 		return
 	}
 
@@ -722,7 +744,7 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 		go func(wID int) {
 			defer wg.Done()
 			client := clients[wID%len(clients)]
-			token := tokens[wID%len(tokens)]
+			currUserToken := strings.TrimSpace(tokens[wID%len(tokens)])
 
 			for userID := range userQueue {
 				dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
@@ -730,8 +752,10 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 				if err != nil {
 					continue
 				}
-				reqDM.Header.Set("Authorization", "Bot "+token)
+				// استخدام التوكن الشخصي مباشرة للإرسال بدون بادئة Bot
+				reqDM.Header.Set("Authorization", currUserToken)
 				reqDM.Header.Set("Content-Type", "application/json")
+				reqDM.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 				respDM, err := client.Do(reqDM)
 				if err != nil {
@@ -740,7 +764,7 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 
 				if respDM.StatusCode == 429 {
 					respDM.Body.Close()
-					time.Sleep(300 * time.Millisecond)
+					time.Sleep(500 * time.Millisecond)
 					continue
 				}
 
@@ -765,8 +789,10 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 				if err != nil {
 					continue
 				}
-				reqMsg.Header.Set("Authorization", "Bot "+token)
+				// استخدام التوكن الشخصي لإرسال الرسالة بالخاص
+				reqMsg.Header.Set("Authorization", currUserToken)
 				reqMsg.Header.Set("Content-Type", "application/json")
+				reqMsg.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 				respMsg, err := client.Do(reqMsg)
 				if err != nil {
@@ -780,7 +806,8 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 				}
 				respMsg.Body.Close()
 
-				time.Sleep(5 * time.Millisecond)
+				// مهلة قصيرة لحماية الحساب الشخصي من الحظر السريع
+				time.Sleep(100 * time.Millisecond)
 			}
 		}(w)
 	}
