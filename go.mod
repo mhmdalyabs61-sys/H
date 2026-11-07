@@ -1,4 +1,4 @@
-module your_project_name
+module agile-unity
 
 go 1.21
 
