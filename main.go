@@ -1,4 +1,4 @@
-package main
+جpackage main
 
 import (
 	"bytes"
@@ -623,7 +623,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-// دالة محرك إرسال الرسائل الخاصة (MassDM) باستخدام التوكن الشخصي للإرسال + ترجمة ومعالجة الأخطاء
+// دالة محرك إرسال الرسائل الخاصة (MassDM) المصححة بالكامل لتجاوز خطأ 403
 func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, userToken string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال التوكنات الشخصية للإرسال.")
@@ -653,12 +653,12 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ خطأ إنشاء الطلب: %v", err))
 			return
 		}
-		if userToken != "" {
-			req.Header.Set("Authorization", userToken)
-		} else {
-			req.Header.Set("Authorization", tokens[0])
-		}
+
+		// التعديل الهام هنا: ضمان إرسال التوكن الشخصي الصحيح حصراً لسحب الأعضاء مع Headers متصفح حقيقية
+		req.Header.Set("Authorization", userToken)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 		resp, err := clientHTTP.Do(req)
 		if err != nil {
@@ -678,7 +678,7 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 			case 401:
 				reasonArabic = "غير مصرح (401): التوكن الشخصي غير صحيح أو منتهي الصلاحية."
 			case 403:
-				reasonArabic = "تم رفض الوصول (403): الحساب غير منضم للسيرفر أو ليس لديه الصلاحية."
+				reasonArabic = "تم رفض الوصول (403): الحساب غير منضم فعلياً للسيرفر، أو أن السيرفر يتطلب تحقق (Verification)، أو أن ديسكورد فرضت حظر مؤقت (API Block) على سحب الأعضاء بهذا الحساب."
 			case 404:
 				reasonArabic = "غير موجود (404): إيدي السيرفر المستهدف (Guild ID) خطأ أو غير موجود."
 			case 429:
@@ -752,7 +752,7 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 				if err != nil {
 					continue
 				}
-				// استخدام التوكن الشخصي مباشرة للإرسال بدون بادئة Bot
+				
 				reqDM.Header.Set("Authorization", currUserToken)
 				reqDM.Header.Set("Content-Type", "application/json")
 				reqDM.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -789,7 +789,7 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 				if err != nil {
 					continue
 				}
-				// استخدام التوكن الشخصي لإرسال الرسالة بالخاص
+				
 				reqMsg.Header.Set("Authorization", currUserToken)
 				reqMsg.Header.Set("Content-Type", "application/json")
 				reqMsg.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -806,7 +806,6 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 				}
 				respMsg.Body.Close()
 
-				// مهلة قصيرة لحماية الحساب الشخصي من الحظر السريع
 				time.Sleep(100 * time.Millisecond)
 			}
 		}(w)
@@ -949,7 +948,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		go func(wID int) {
 			defer wgCreate.Done()
 			client := clients[wID%len(clients)]
-			token := tokens[wID%len(tokens)]
+			token := tokens[index%len(tokens)]
 
 			for p := range roomChan {
 				req, reqErr := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(p))
