@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/gorilla/websocket"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 var massiveProxyPool = []string{
@@ -27,14 +28,59 @@ var massiveProxyPool = []string{
 	"200.105.215.12:80",
 }
 
-type GatewayPayload struct {
-	Op int         `json:"op"`
-	D  interface{} `json:"d"`
-	S  *int        `json:"s"`
-	T  *string     `json:"t"`
+var db *sql.DB
+
+func initDatabase() {
+	var err error
+	db, err = sql.Open("sqlite3", "./local_cache.db")
+	if err != nil {
+		fmt.Println("❌ خطأ في فتح قاعدة البيانات المحلية:", err)
+		return
+	}
+
+	createTableQuery := `
+	CREATE TABLE IF NOT EXISTS guild_cache (
+		guild_id TEXT,
+		user_id TEXT,
+		PRIMARY KEY (guild_id, user_id)
+	);`
+	_, _ = db.Exec(createTableQuery)
+	fmt.Println("📦 تم تفعيل نظام الكاش وقاعدة البيانات المحلية بنجاح.")
+}
+
+func saveUserToCache(guildID, userID string) {
+	if db == nil {
+		return
+	}
+	_, _ = db.Exec("INSERT OR IGNORE INTO guild_cache (guild_id, user_id) VALUES (?, ?)", guildID, userID)
+}
+
+func getCachedUsersForGuild(guildID string) []string {
+	if db == nil {
+		return nil
+	}
+	rows, err := db.Query("SELECT user_id FROM guild_cache WHERE guild_id = ?", guildID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var uid string
+		if rows.Scan(&uid) == nil {
+			users = append(users, uid)
+		}
+	}
+	return users
 }
 
 func main() {
+	initDatabase()
+	if db != nil {
+		defer db.Close()
+	}
+
 	token := os.Getenv("MASTERGUARD_TOKEN")
 	if token == "" {
 		fmt.Println("❌ خطأ: متغير البيئة MASTERGUARD_TOKEN غير موجود")
@@ -43,7 +89,7 @@ func main() {
 
 	sess, err := discordgo.New("Bot " + token)
 	if err != nil {
-		fmt.Println("خطأ في إنشاء جلسة البوت:", err)
+		fmt.Println("خطأ في إنشاء جلسة البوت الأساسي:", err)
 		return
 	}
 
@@ -54,24 +100,9 @@ func main() {
 		Name:        cmdClone,
 		Description: "نسخ سيرفر كامل بالصلاحيات الكاملة والترتيب الدقيق",
 		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "template_guild_id",
-				Description: "إيدي السيرفر المراد نسخه",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "user_token",
-				Description: "التوكن الشخصي لحسابك (لسحب السيرفر المصدر)",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "bot_tokens",
-				Description: "توكنات البوتات لتنفيذ الإنشاء (مفصولة بفاصلة)",
-				Required:    true,
-			},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "template_guild_id", Description: "إيدي السيرفر المراد نسخه", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "user_token", Description: "التوكن الشخصي لحسابك (لسحب السيرفر المصدر)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات لتنفيذ الإنشاء (مفصولة بفاصلة)", Required: true},
 		},
 	}
 
@@ -80,74 +111,24 @@ func main() {
 		Name:        cmdNuke,
 		Description: "محرك التدمير الشامل: حذف، باند، وسبام بالسرعة القصوى",
 		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionBoolean,
-				Name:        "enable_ban",
-				Description: "تفعيل باند الأعضاء؟",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "room_name",
-				Description: "اسم الرومات الجديدة",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
-				Name:        "rooms_count",
-				Description: "عدد الرومات",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "message_content",
-				Description: "محتوى رسالة السبام",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionInteger,
-				Name:        "messages_count",
-				Description: "عدد الرسائل بكل روم",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "bot_tokens",
-				Description: "توكنات البوتات التنفيذية مفصولة بفاصلة",
-				Required:    true,
-			},
+			{Type: discordgo.ApplicationCommandOptionBoolean, Name: "enable_ban", Description: "تفعيل باند الأعضاء؟", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "room_name", Description: "اسم الرومات الجديدة", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "rooms_count", Description: "عدد الرومات", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "message_content", Description: "محتوى رسالة السبام", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "messages_count", Description: "عدد الرسائل بكل روم", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات التنفيذية مفصولة بفاصلة", Required: true},
 		},
 	}
 
 	cmdMassDM := "massdm"
 	commandMassDM := &discordgo.ApplicationCommand{
 		Name:        cmdMassDM,
-		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر بالتوكن الشخصي والـ WebSocket",
+		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر عبر التقاطع المحلي والتوكن الشخصي",
 		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "guild_id",
-				Description: "إيدي السيرفر المراد استهدافه",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "user_token",
-				Description: "التوكن الشخصي لحسابك (للسحب والإرسال)",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "message",
-				Description: "محتوى الرسالة المراد إرسالها بالخاص",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "bot_tokens",
-				Description: "التوكنات الشخصية الإضافية للإرسال (مفصولة بفاصلة)",
-				Required:    true,
-			},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "guild_id", Description: "إيدي السيرفر المراد استهدافه", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "user_token", Description: "التوكن الشخصي لحسابك (للسحب والإرسال)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "message", Description: "محتوى الرسالة المراد إرسالها بالخاص", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "التوكنات الشخصية الإضافية للإرسال (مفصولة بفاصلة)", Required: true},
 		},
 	}
 
@@ -157,94 +138,31 @@ func main() {
 		}
 
 		data := i.ApplicationCommandData()
+		optMap := parseOptions(data.Options)
 
 		if data.Name == cmdClone {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "🔄 جاري نسخ الرتب والصلاحيات والترتيب بدقة تامة...",
-					Flags:   discordgo.MessageFlagsEphemeral,
-				},
+				Data: &discordgo.InteractionResponseData{Content: "🔄 جاري نسخ الرتب والصلاحيات والترتيب بدقة تامة...", Flags: discordgo.MessageFlagsEphemeral},
 			})
-
-			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-			for _, opt := range data.Options {
-				optionMap[opt.Name] = opt
-			}
-
-			templateGuildID := optionMap["template_guild_id"].StringValue()
-			userToken := optionMap["user_token"].StringValue()
-			tokensInput := optionMap["bot_tokens"].StringValue()
-
-			var tokens []string
-			for _, t := range strings.Split(tokensInput, ",") {
-				t = strings.TrimSpace(t)
-				if t != "" {
-					tokens = append(tokens, t)
-				}
-			}
-
-			go executeServerClonerWithUserToken(tokens, userToken, massiveProxyPool, i.GuildID, templateGuildID, i.Interaction, s)
+			tokens := parseTokens(optMap["bot_tokens"])
+			go executeServerClonerWithUserToken(tokens, optMap["user_token"], massiveProxyPool, i.GuildID, optMap["template_guild_id"], i.Interaction, s)
 
 		} else if data.Name == cmdNuke {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "🚀 جاري تفعيل محرك nuke1 بالسرعة القصوى...",
-					Flags:   discordgo.MessageFlagsEphemeral,
-				},
+				Data: &discordgo.InteractionResponseData{Content: "🚀 جاري تفعيل محرك nuke1 بالسرعة القصوى...", Flags: discordgo.MessageFlagsEphemeral},
 			})
-
-			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-			for _, opt := range data.Options {
-				optionMap[opt.Name] = opt
-			}
-
-			enableBan := optionMap["enable_ban"].BoolValue()
-			roomName := optionMap["room_name"].StringValue()
-			roomsCount := int(optionMap["rooms_count"].IntValue())
-			messageContent := optionMap["message_content"].StringValue()
-			messagesCount := int(optionMap["messages_count"].IntValue())
-			tokensInput := optionMap["bot_tokens"].StringValue()
-
-			var tokens []string
-			for _, t := range strings.Split(tokensInput, ",") {
-				t = strings.TrimSpace(t)
-				if t != "" {
-					tokens = append(tokens, t)
-				}
-			}
-
-			go executeNukeEngine(tokens, massiveProxyPool, i.GuildID, s.State.User.ID, roomName, roomsCount, messageContent, messagesCount, enableBan, s)
+			tokens := parseTokens(optMap["bot_tokens"])
+			go executeNukeEngine(tokens, massiveProxyPool, i.GuildID, s.State.User.ID, optMap["room_name"], int(optMap["rooms_count_val"]), optMap["message_content"], int(optMap["messages_count_val"]), optMap["enable_ban_val"], s)
 
 		} else if data.Name == cmdMassDM {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "📨 جاري سحب الأعضاء بالتوكن الشخصي وبدء الحملة...",
-					Flags:   discordgo.MessageFlagsEphemeral,
-				},
+				Data: &discordgo.InteractionResponseData{Content: "🔍 جاري فحص الكاش والتقاطع المحلي للأعضاء...", Flags: discordgo.MessageFlagsEphemeral},
 			})
-
-			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption)
-			for _, opt := range data.Options {
-				optionMap[opt.Name] = opt
-			}
-
-			targetGuildID := optionMap["guild_id"].StringValue()
-			userToken := optionMap["user_token"].StringValue()
-			msgContent := optionMap["message"].StringValue()
-			tokensInput := optionMap["bot_tokens"].StringValue()
-
-			var tokens []string
-			for _, t := range strings.Split(tokensInput, ",") {
-				t = strings.TrimSpace(t)
-				if t != "" {
-					tokens = append(tokens, t)
-				}
-			}
-
-			go executeMassDMWithUserTokenHTTP(tokens, userToken, massiveProxyPool, targetGuildID, msgContent, i.ChannelID, i.Interaction, s)
+			tokens := parseTokens(optMap["bot_tokens"])
+			go executeCrossReferenceMassDM(tokens, optMap["user_token"], massiveProxyPool, optMap["guild_id"], optMap["message"], i.ChannelID, i.Interaction, s)
 		}
 	})
 
@@ -257,13 +175,44 @@ func main() {
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandClone)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandMassDM)
-	fmt.Println("⚡ الأوامر جاهزة بنجاح!")
+	fmt.Println("⚡ الأوامر الثلاثة (cloner, nuke1, massdm) جاهزة بالكامل!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-stop
 
 	sess.Close()
+}
+
+func parseOptions(opts []*discordgo.ApplicationCommandInteractionDataOption) map[string]interface{} {
+	m := make(map[string]interface{})
+	for _, opt := range opts {
+		m[opt.Name] = opt.Value
+		switch opt.Type {
+		case discordgo.ApplicationCommandOptionString:
+			m[opt.Name] = opt.StringValue()
+		case discordgo.ApplicationCommandOptionBoolean:
+			m[opt.Name+"_val"] = opt.BoolValue()
+		case discordgo.ApplicationCommandOptionInteger:
+			m[opt.Name+"_val"] = opt.IntValue()
+		}
+	}
+	return m
+}
+
+func parseTokens(input interface{}) []string {
+	str, ok := input.(string)
+	if !ok {
+		return nil
+	}
+	var res []string
+	for _, t := range strings.Split(str, ",") {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			res = append(res, t)
+		}
+	}
+	return res
 }
 
 func filterActiveProxies(rawProxies []string) []*http.Client {
@@ -309,7 +258,7 @@ func sendReasonToChannel(s *discordgo.Session, channelID, reason string) {
 	if channelID == "" {
 		return
 	}
-	_, _ = s.ChannelMessageSend(channelID, fmt.Sprintf("⚠️ **تقرير أداة MassDM:**\n%s", reason))
+	_, _ = s.ChannelMessageSend(channelID, fmt.Sprintf("⚠️ **تقرير الأداة:**\n%s", reason))
 }
 
 func fetchGuildDataWithUserToken(userToken, guildID string) ([]map[string]interface{}, []map[string]interface{}, error) {
@@ -638,93 +587,73 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-func executeMassDMWithUserTokenHTTP(tokens []string, userToken string, rawProxies []string, targetGuildID string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
+func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies []string, targetGuildID string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	userToken = strings.TrimSpace(userToken)
 
-	updateInteractionStatus(s, interaction, "🔌 جاري الاتصال ومحاولة التقاط الأعضاء عبر الـ WebSocket وتوكن السحب...")
+	allUserIDs := getCachedUsersForGuild(targetGuildID)
 
-	var allUserIDs []string
-	after := ""
-	
-	for {
-		reqURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000", targetGuildID)
-		if after != "" {
-			reqURL += "&after=" + after
-		}
-
-		req, err := http.NewRequest("GET", reqURL, nil)
-		if err != nil {
-			break
-		}
-
-		req.Header.Set("Authorization", userToken)
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			break
-		}
-
-		if resp.StatusCode != 200 {
-			resp.Body.Close()
-			break
-		}
-
-		var members []map[string]interface{}
-		if json.NewDecoder(resp.Body).Decode(&members) != nil {
-			resp.Body.Close()
-			break
-		}
-		resp.Body.Close()
-
-		if len(members) == 0 {
-			break
-		}
-
-		for _, m := range members {
-			user, ok := m["user"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			isBot, _ := user["bot"].(bool)
-			if isBot {
-				continue
-			}
-
-			id, ok := user["id"].(string)
-			if ok && id != "" {
-				allUserIDs = append(allUserIDs, id)
-				after = id
-			}
-		}
-
-		if len(members) < 1000 {
-			break
-		}
-	}
-
-	// تفعيل الاتصال الاحتياطي عبر الـ WebSocket وجلب حزم الـ Chunks
 	if len(allUserIDs) == 0 {
-		u := url.URL{Scheme: "wss", Host: "gateway.discord.gg", Path: "/", RawQuery: "v=10&encoding=json"}
-		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-		if err == nil {
-			defer c.Close()
-			auth := GatewayPayload{
-				Op: 2,
-				D: map[string]interface{}{
-					"token": userToken,
-					"properties": map[string]string{
-						"os": "Windows", "browser": "Chrome", "device": "",
-					},
-					"intents": 3276799,
-				},
+		updateInteractionStatus(s, interaction, "🔄 الكاش المحلي فارغ، جاري سحب الأيديات بالتوكن الشخصي...")
+		after := ""
+		for {
+			reqURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000", targetGuildID)
+			if after != "" {
+				reqURL += "&after=" + after
 			}
-			data, _ := json.Marshal(auth)
-			c.WriteMessage(websocket.TextMessage, data)
-			time.Sleep(2 * time.Second)
+
+			req, err := http.NewRequest("GET", reqURL, nil)
+			if err != nil {
+				break
+			}
+
+			req.Header.Set("Authorization", userToken)
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+			req.Header.Set("Accept", "application/json")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				break
+			}
+
+			if resp.StatusCode != 200 {
+				resp.Body.Close()
+				break
+			}
+
+			var members []map[string]interface{}
+			if json.NewDecoder(resp.Body).Decode(&members) != nil {
+				resp.Body.Close()
+				break
+			}
+			resp.Body.Close()
+
+			if len(members) == 0 {
+				break
+			}
+
+			for _, m := range members {
+				user, ok := m["user"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				isBot, _ := user["bot"].(bool)
+				if isBot {
+					continue
+				}
+
+				id, ok := user["id"].(string)
+				if ok && id != "" {
+					allUserIDs = append(allUserIDs, id)
+					saveUserToCache(targetGuildID, id)
+					after = id
+				}
+			}
+
+			if len(members) < 1000 {
+				break
+			}
 		}
 	}
 
@@ -737,7 +666,7 @@ func executeMassDMWithUserTokenHTTP(tokens []string, userToken string, rawProxie
 
 	allTokens := append([]string{userToken}, tokens...)
 
-	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم سحب (%d عضو) بنجاح. جاري بدء الإرسال الفوري...", len(allUserIDs)))
+	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم العثور على (%d عضو) عبر الكاش والتقاطع المحلي. جاري بدء الإرسال الفوري...", len(allUserIDs)))
 	sendReasonToChannel(s, responseChannelID, fmt.Sprintf("تم جلب (%d) عضو بنجاح وبدء إرسال الرسائل الخاصة.", len(allUserIDs)))
 
 	userQueue := make(chan string, len(allUserIDs))
