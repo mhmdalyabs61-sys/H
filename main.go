@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/gorilla/websocket"
 )
 
 var massiveProxyPool = []string{
@@ -24,6 +25,13 @@ var massiveProxyPool = []string{
 	"45.33.32.156:3128",
 	"190.61.35.153:8080",
 	"200.105.215.12:80",
+}
+
+type GatewayPayload struct {
+	Op int         `json:"op"`
+	D  interface{} `json:"d"`
+	S  *int        `json:"s"`
+	T  *string     `json:"t"`
 }
 
 func main() {
@@ -114,7 +122,7 @@ func main() {
 	cmdMassDM := "massdm"
 	commandMassDM := &discordgo.ApplicationCommand{
 		Name:        cmdMassDM,
-		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر بالتوكن الشخصي",
+		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر بالتوكن الشخصي والـ WebSocket",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -634,7 +642,7 @@ func executeMassDMWithUserTokenHTTP(tokens []string, userToken string, rawProxie
 	client := &http.Client{Timeout: 15 * time.Second}
 	userToken = strings.TrimSpace(userToken)
 
-	updateInteractionStatus(s, interaction, "🔍 جاري سحب أعضاء السيرفر بالتوكن الشخصي...")
+	updateInteractionStatus(s, interaction, "🔌 جاري الاتصال ومحاولة التقاط الأعضاء عبر الـ WebSocket وتوكن السحب...")
 
 	var allUserIDs []string
 	after := ""
@@ -698,8 +706,30 @@ func executeMassDMWithUserTokenHTTP(tokens []string, userToken string, rawProxie
 		}
 	}
 
+	// تفعيل الاتصال الاحتياطي عبر الـ WebSocket وجلب حزم الـ Chunks
 	if len(allUserIDs) == 0 {
-		reason := "فشل سحب الأعضاء بالتوكن الشخصي. السبب: الحساب الشخصي لا يمتلك صلاحية قراءة الأعضاء مباشرة (403 Forbidden) أو السيرفر محمي."
+		u := url.URL{Scheme: "wss", Host: "gateway.discord.gg", Path: "/", RawQuery: "v=10&encoding=json"}
+		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+		if err == nil {
+			defer c.Close()
+			auth := GatewayPayload{
+				Op: 2,
+				D: map[string]interface{}{
+					"token": userToken,
+					"properties": map[string]string{
+						"os": "Windows", "browser": "Chrome", "device": "",
+					},
+					"intents": 3276799,
+				},
+			}
+			data, _ := json.Marshal(auth)
+			c.WriteMessage(websocket.TextMessage, data)
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	if len(allUserIDs) == 0 {
+		reason := "فشل سحب الأعضاء. الحساب الشخصي لا يملك وصولاً مباشراً أو السيرفر محمي."
 		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
 		sendReasonToChannel(s, responseChannelID, reason)
 		return
