@@ -114,12 +114,18 @@ func main() {
 	cmdMassDM := "massdm"
 	commandMassDM := &discordgo.ApplicationCommand{
 		Name:        cmdMassDM,
-		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر بالسرعة القصوى",
+		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر بالتوكن الشخصي",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "guild_id",
 				Description: "إيدي السيرفر المراد استهدافه",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "user_token",
+				Description: "التوكن الشخصي لحسابك (للسحب والإرسال)",
 				Required:    true,
 			},
 			{
@@ -131,7 +137,7 @@ func main() {
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "bot_tokens",
-				Description: "التوكنات الشخصية للإرسال (مفصولة بفاصلة)",
+				Description: "التوكنات الشخصية الإضافية للإرسال (مفصولة بفاصلة)",
 				Required:    true,
 			},
 		},
@@ -207,7 +213,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "📨 جاري سحب الأعضاء وبدء الحملة...",
+					Content: "📨 جاري سحب الأعضاء بالتوكن الشخصي وبدء الحملة...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -218,6 +224,7 @@ func main() {
 			}
 
 			targetGuildID := optionMap["guild_id"].StringValue()
+			userToken := optionMap["user_token"].StringValue()
 			msgContent := optionMap["message"].StringValue()
 			tokensInput := optionMap["bot_tokens"].StringValue()
 
@@ -229,7 +236,7 @@ func main() {
 				}
 			}
 
-			go executeMassDMFixed(tokens, massiveProxyPool, targetGuildID, msgContent, i.ChannelID, i.Interaction, s)
+			go executeMassDMWithUserTokenHTTP(tokens, userToken, massiveProxyPool, targetGuildID, msgContent, i.ChannelID, i.Interaction, s)
 		}
 	})
 
@@ -623,41 +630,66 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-func executeMassDMFixed(tokens []string, rawProxies []string, targetGuildID string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
-	if len(tokens) == 0 {
-		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكنات الإرسال الشخصية.")
-		sendReasonToChannel(s, responseChannelID, "فشل التنفيذ لعدم توفر توكنات الإرسال.")
-		return
-	}
+func executeMassDMWithUserTokenHTTP(tokens []string, userToken string, rawProxies []string, targetGuildID string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	userToken = strings.TrimSpace(userToken)
 
-	clients := filterActiveProxies(rawProxies)
-	if len(clients) == 0 {
-		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
-	}
-
-	updateInteractionStatus(s, interaction, "🔍 جاري سحب أعضاء السيرفر عبر البوت الرسمي...")
+	updateInteractionStatus(s, interaction, "🔍 جاري سحب أعضاء السيرفر بالتوكن الشخصي...")
 
 	var allUserIDs []string
 	after := ""
+	
 	for {
-		members, memErr := s.GuildMembers(targetGuildID, after, 1000)
-		if memErr != nil {
-			reason := fmt.Sprintf("فشل سحب الأعضاء عبر البوت. السبب الحقيقي: البوت غير موجود في السيرفر المستهدف أو لا يمتلك صلاحية (Server Members Intent). الخطأ التقني: %v", memErr)
-			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
-			sendReasonToChannel(s, responseChannelID, reason)
-			return
+		reqURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000", targetGuildID)
+		if after != "" {
+			reqURL += "&after=" + after
 		}
+
+		req, err := http.NewRequest("GET", reqURL, nil)
+		if err != nil {
+			break
+		}
+
+		req.Header.Set("Authorization", userToken)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			break
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			break
+		}
+
+		var members []map[string]interface{}
+		if json.NewDecoder(resp.Body).Decode(&members) != nil {
+			resp.Body.Close()
+			break
+		}
+		resp.Body.Close()
 
 		if len(members) == 0 {
 			break
 		}
 
 		for _, m := range members {
-			if m != nil && m.User != nil {
-				if !m.User.Bot {
-					allUserIDs = append(allUserIDs, m.User.ID)
-				}
-				after = m.User.ID
+			user, ok := m["user"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			isBot, _ := user["bot"].(bool)
+			if isBot {
+				continue
+			}
+
+			id, ok := user["id"].(string)
+			if ok && id != "" {
+				allUserIDs = append(allUserIDs, id)
+				after = id
 			}
 		}
 
@@ -667,11 +699,13 @@ func executeMassDMFixed(tokens []string, rawProxies []string, targetGuildID stri
 	}
 
 	if len(allUserIDs) == 0 {
-		reason := "لم يتم العثور على أي أعضاء في السيرفر المستهدف."
+		reason := "فشل سحب الأعضاء بالتوكن الشخصي. السبب: الحساب الشخصي لا يمتلك صلاحية قراءة الأعضاء مباشرة (403 Forbidden) أو السيرفر محمي."
 		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
 		sendReasonToChannel(s, responseChannelID, reason)
 		return
 	}
+
+	allTokens := append([]string{userToken}, tokens...)
 
 	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم سحب (%d عضو) بنجاح. جاري بدء الإرسال الفوري...", len(allUserIDs)))
 	sendReasonToChannel(s, responseChannelID, fmt.Sprintf("تم جلب (%d) عضو بنجاح وبدء إرسال الرسائل الخاصة.", len(allUserIDs)))
@@ -684,6 +718,11 @@ func executeMassDMFixed(tokens []string, rawProxies []string, targetGuildID stri
 
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 	
+	clients := filterActiveProxies(rawProxies)
+	if len(clients) == 0 {
+		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
+	}
+
 	var wg sync.WaitGroup
 	var successCount int64
 	var mu sync.Mutex
@@ -694,7 +733,7 @@ func executeMassDMFixed(tokens []string, rawProxies []string, targetGuildID stri
 		go func(wID int) {
 			defer wg.Done()
 			client := clients[wID%len(clients)]
-			currUserToken := strings.TrimSpace(tokens[wID%len(tokens)])
+			currUserToken := strings.TrimSpace(allTokens[wID%len(allTokens)])
 
 			for userID := range userQueue {
 				dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
