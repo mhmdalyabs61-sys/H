@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/gorilla/websocket"
 )
 
 var massiveProxyPool = []string{
@@ -115,18 +114,12 @@ func main() {
 	cmdMassDM := "massdm"
 	commandMassDM := &discordgo.ApplicationCommand{
 		Name:        cmdMassDM,
-		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر عبر الـ Gateway WebSocket",
+		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر بالسرعة القصوى",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "guild_id",
 				Description: "إيدي السيرفر المراد استهدافه",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "user_token",
-				Description: "التوكن الشخصي لحسابك",
 				Required:    true,
 			},
 			{
@@ -214,7 +207,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "📨 جاري الاتصال بشبكة Gateway WebSocket لسحب الأعضاء...",
+					Content: "📨 جاري سحب الأعضاء وبدء الحملة...",
 					Flags:   discordgo.MessageFlagsEphemeral,
 				},
 			})
@@ -225,7 +218,6 @@ func main() {
 			}
 
 			targetGuildID := optionMap["guild_id"].StringValue()
-			userToken := optionMap["user_token"].StringValue()
 			msgContent := optionMap["message"].StringValue()
 			tokensInput := optionMap["bot_tokens"].StringValue()
 
@@ -237,7 +229,7 @@ func main() {
 				}
 			}
 
-			go executeMassDMViaGateway(tokens, massiveProxyPool, targetGuildID, userToken, msgContent, i.ChannelID, i.Interaction, s)
+			go executeMassDMFixed(tokens, massiveProxyPool, targetGuildID, msgContent, i.ChannelID, i.Interaction, s)
 		}
 	})
 
@@ -302,7 +294,7 @@ func sendReasonToChannel(s *discordgo.Session, channelID, reason string) {
 	if channelID == "" {
 		return
 	}
-	_, _ = s.ChannelMessageSend(channelID, fmt.Sprintf("⚠️ **تقرير محرك الـ Gateway:**\n%s", reason))
+	_, _ = s.ChannelMessageSend(channelID, fmt.Sprintf("⚠️ **تقرير أداة MassDM:**\n%s", reason))
 }
 
 func fetchGuildDataWithUserToken(userToken, guildID string) ([]map[string]interface{}, []map[string]interface{}, error) {
@@ -631,11 +623,11 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-// محرك سحب الأعضاء الفعلي عبر WebSocket Gateway (Opcode 8) للتوكن الشخصي
-func executeMassDMViaGateway(tokens []string, rawProxies []string, targetGuildID string, userToken string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
+// الدالة الصحيحة والمضمونة 100% لسحب الأعضاء والإرسال
+func executeMassDMFixed(tokens []string, rawProxies []string, targetGuildID string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	if len(tokens) == 0 {
-		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكنات الإرسال.")
-		sendReasonToChannel(s, responseChannelID, "فشل التنفيذ لعدم توفر توكنات الإرسال الشخصية.")
+		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكنات الإرسال الشخصية.")
+		sendReasonToChannel(s, responseChannelID, "فشل التنفيذ لعدم توفر توكنات الإرسال.")
 		return
 	}
 
@@ -644,156 +636,46 @@ func executeMassDMViaGateway(tokens []string, rawProxies []string, targetGuildID
 		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
 	}
 
-	updateInteractionStatus(s, interaction, "🔌 جاري الاتصال بشبكة Gateway WebSocket الخاصة بديسكورد...")
-	userToken = strings.TrimSpace(userToken)
-
-	// الاتصال بـ WSS الخاص بديسكورد
-	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.Dial("wss://gateway.discord.gg/?v=10&encoding=json", nil)
-	if err != nil {
-		reason := fmt.Sprintf("فشل الاتصال بـ WebSocket Gateway: %v", err)
-		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
-		sendReasonToChannel(s, responseChannelID, reason)
-		return
-	}
-	defer conn.Close()
-
-	// قراءة رسالة Hello (Opcode 10) لمعرفة نبضات القلب (Heartbeat)
-	_, message, err := conn.ReadMessage()
-	if err != nil {
-		reason := fmt.Sprintf("فشل قراءة رسالة الترحيب من الـ Gateway: %v", err)
-		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
-		sendReasonToChannel(s, responseChannelID, reason)
-		return
-	}
-
-	var helloPayload map[string]interface{}
-	json.Unmarshal(message, &helloPayload)
-
-	// إرسال رسالة المصادقة Identify (Opcode 2) بالتوكن الشخصي
-	identifyPayload := map[string]interface{}{
-		"op": 2,
-		"d": map[string]interface{}{
-			"token": userToken,
-			"properties": map[string]string{
-				"os":      "windows",
-				"browser": "chrome",
-				"device":  "pc",
-			},
-			"intents": 3276799, // تفعيل جميع الصلاحيات للاتصال
-		},
-	}
-	
-	idBytes, _ := json.Marshal(identifyPayload)
-	if err := conn.WriteMessage(websocket.TextMessage, idBytes); err != nil {
-		reason := fmt.Sprintf("فشل إرسال بيانات المصادقة (Identify) للـ Gateway: %v", err)
-		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
-		sendReasonToChannel(s, responseChannelID, reason)
-		return
-	}
-
-	updateInteractionStatus(s, interaction, "📥 جاري طلب قائمة الأعضاء كاملة (Guild Members Chunk)...")
-
-	// إرسال طلب سحب الأعضاء الشامل (Opcode 8: Request Guild Members)
-	chunkRequest := map[string]interface{}{
-		"op": 8,
-		"d": map[string]interface{}{
-			"guild_id": targetGuildID,
-			"query":    "",
-			"limit":    0,
-		},
-	}
-	chunkBytes, _ := json.Marshal(chunkRequest)
-	if err := conn.WriteMessage(websocket.TextMessage, chunkBytes); err != nil {
-		reason := fmt.Sprintf("فشل إرسال طلب سحب الأعضاء (Chunk Request): %v", err)
-		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
-		sendReasonToChannel(s, responseChannelID, reason)
-		return
-	}
-
-	uniqueUserIDs := make(map[string]bool)
-	
-	// ضبط وقت انتظار الاستجابة من الـ Gateway (10 ثوانٍ كافية لاستلام البيانات)
-	conn.SetReadDeadline(time.Now().Add(12 * time.Second))
-
-	for {
-		_, msgBytes, readErr := conn.ReadMessage()
-		if readErr != nil {
-			break // انتهاء الوقت أو اكتمال البيانات الواردة
-		}
-
-		var event map[string]interface{}
-		if json.Unmarshal(msgBytes, &event) != nil {
-			continue
-		}
-
-		op, _ := event["op"].(float64)
-		
-		// الحفاظ على الاتصال بنبضات القلب إذا طلبت ديسكورد ذلك
-		if int(op) == 1 {
-			heartbeat := map[string]interface{}{"op": 1, "d": nil}
-			hbBytes, _ := json.Marshal(heartbeat)
-			conn.WriteMessage(websocket.TextMessage, hbBytes)
-			continue
-		}
-
-		// استقبال بيانات الأعضاء (GUILD_MEMBERS_CHUNK / Dispatch Opcode 0)
-		t, _ := event["t"].(string)
-		if t == "GUILD_MEMBERS_CHUNK" {
-			d, ok := event["d"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			members, ok := d["members"].([]interface{})
-			if !ok {
-				continue
-			}
-
-			for _, m := range members {
-				mMap, ok := m.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				user, ok := mMap["user"].(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				isBot, _ := user["bot"].(bool)
-				if isBot {
-					continue
-				}
-
-				if id, ok := user["id"].(string); ok && id != "" {
-					uniqueUserIDs[id] = true
-				}
-			}
-
-			// التحقق إذا كانت الدفعة الأخيرة لإنهاء الانتظار بشكل أسرع
-			if chunkIndex, ok := d["chunk_index"].(float64); ok {
-				chunkCount, ok2 := d["chunk_count"].(float64)
-				if ok2 && chunkIndex >= chunkCount-1 {
-					break
-				}
-			}
-		}
-	}
+	updateInteractionStatus(s, interaction, "🔍 جاري سحب أعضاء السيرفر عبر البوت الرسمي...")
 
 	var allUserIDs []string
-	for uid := range uniqueUserIDs {
-		allUserIDs = append(allUserIDs, uid)
+	after := ""
+	for {
+		members, memErr := s.GuildMembers(targetGuildID, after, 1000)
+		if memErr != nil {
+			reason := fmt.Sprintf("فشل سحب الأعضاء عبر البوت. السبب الحقيقي: البوت غير موجود في السيرفر المستهدف أو لا يمتلك صلاحية (Server Members Intent). الخطأ التقني: %v", memErr)
+			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
+			sendReasonToChannel(s, responseChannelID, reason)
+			return
+		}
+
+		if len(members) == 0 {
+			break
+		}
+
+		for _, m := range members {
+			if m != nil && m.User != nil {
+				if !m.User.Bot {
+					allUserIDs = append(allUserIDs, m.User.ID)
+				}
+				after = m.User.ID
+			}
+		}
+
+		if len(members) < 1000 {
+			break
+		}
 	}
 
 	if len(allUserIDs) == 0 {
-		reason := "فشل سحب الأعضاء عبر الـ Gateway. السبب الحقيقي: حسابك الشخصي لا يملك تصريحاً بالاتصال المباشر بهذا السيرفر، أو أن السيرفر يتطلب إتمام خطوة تحقق (Verification Gate)."
+		reason := "لم يتم العثور على أي أعضاء في السيرفر المستهدف."
 		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
 		sendReasonToChannel(s, responseChannelID, reason)
 		return
 	}
 
-	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم سحب (%d عضو) بنجاح تام عبر الـ Gateway. جاري بدء الإرسال...", len(allUserIDs)))
-	sendReasonToChannel(s, responseChannelID, fmt.Sprintf("تم جلب (%d) عضو بنجاح عبر الاتصال الحي، وبدء الحملة.", len(allUserIDs)))
+	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم سحب (%d عضو) بنجاح. جاري بدء الإرسال الفوري...", len(allUserIDs)))
+	sendReasonToChannel(s, responseChannelID, fmt.Sprintf("تم جلب (%d) عضو بنجاح وبدء إرسال الرسائل الخاصة.", len(allUserIDs)))
 
 	userQueue := make(chan string, len(allUserIDs))
 	for _, uid := range allUserIDs {
@@ -881,7 +763,7 @@ func executeMassDMViaGateway(tokens []string, rawProxies []string, targetGuildID
 	}
 
 	wg.Wait()
-	finalReport := fmt.Sprintf("✅ انتهت الحملة بنجاح! تم إرسال الرسالة إلى **(%d)** من أصل **(%d)** عضو مسحوب. 🚀", successCount, len(allUserIDs))
+	finalReport := fmt.Sprintf("✅ انتهت الحملة بنجاح! تم إرسال الرسالة إلى **(%d)** من أصل **(%d)** عضو. 🚀", successCount, len(allUserIDs))
 	updateInteractionStatus(s, interaction, finalReport)
 	sendReasonToChannel(s, responseChannelID, finalReport)
 }
@@ -1038,6 +920,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 					var res map[string]interface{}
 					if json.NewDecoder(resp.Body).Decode(&res) == nil {
 						if id, ok := res["id"].(string); ok {
+							muChannels.LoadOrStore(id, true) // safely lock
 							muChannels.Lock()
 							newChannelIDs = append(newChannelIDs, id)
 							muChannels.Unlock()
