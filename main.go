@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -316,7 +317,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 			resp.Body.Close()
 
 			if statusCode == 429 {
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 
@@ -377,12 +378,18 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	}
 	wgDel.Wait()
 
-	updateInteractionStatus(s, interaction, "📥 جاري إنشاء الرتب مع الصلاحيات والترتيب الدقيق...")
-	var wgCreateRole sync.WaitGroup
+	updateInteractionStatus(s, interaction, "📥 جاري ترتيب وإنشاء الرتب مع الصلاحيات والألوان...")
+
+	// ترتيب الرتب تنازلياً حسب الـ position الخاص بها لكي يتم إنشاؤها بالترتيب الصحيح
+	sort.Slice(templateRoles, func(i, j int) bool {
+		posI, _ := templateRoles[i]["position"].(float64)
+		posJ, _ := templateRoles[j]["position"].(float64)
+		return posI > posJ
+	})
+
 	for i, r := range templateRoles {
 		name, _ := r["name"].(string)
 		if name == "@everyone" {
-			// تحديث صلاحيات الـ everyone الأساسية
 			if perms, ok := r["permissions"]; ok {
 				everyonePayload, _ := json.Marshal(map[string]interface{}{
 					"permissions": perms,
@@ -391,32 +398,28 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 			}
 			continue
 		}
-		wgCreateRole.Add(1)
-		go func(role map[string]interface{}, idx int) {
-			defer wgCreateRole.Done()
 
-			// معالجة الصلاحيات والترتيب كـ int/string حسب صيغة ديسكورد API
-			var perms interface{} = role["permissions"]
-			if pStr, ok := role["permissions"].(string); ok {
-				var pInt int64
-				fmt.Sscanf(pStr, "%d", &pInt)
-				perms = pInt
-			}
+		var perms interface{} = r["permissions"]
+		if pStr, ok := r["permissions"].(string); ok {
+			var pInt int64
+			fmt.Sscanf(pStr, "%d", &pInt)
+			perms = pInt
+		}
 
-			rolePayload, _ := json.Marshal(map[string]interface{}{
-				"name":        role["name"],
-				"permissions": perms,
-				"color":       role["color"],
-				"hoist":       role["hoist"],
-				"mentionable": role["mentionable"],
-				"position":    role["position"],
-			})
-			makeProxyRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), rolePayload, idx)
-		}(r, i)
+		rolePayload, _ := json.Marshal(map[string]interface{}{
+			"name":        r["name"],
+			"permissions": perms,
+			"color":       r["color"],
+			"hoist":       r["hoist"],
+			"mentionable": r["mentionable"],
+		})
+		makeProxyRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), rolePayload, i)
+		time.Sleep(50 * time.Millisecond) // تأخير بسيط لتجنب Rate Limit وتثبيت الترتيب
 	}
-	wgCreateRole.Wait()
 
-	updateInteractionStatus(s, interaction, "📂 جاري إنشاء الفئات والرومات بصلاحياتها وترتيبها...")
+	updateInteractionStatus(s, interaction, "📂 جاري إنشاء الفئات والرومات بصلاحياتها وترتيبها الدقيق...")
+	
+	// فصل الفئات وترتيبها حسب الـ position
 	var categories []map[string]interface{}
 	var regularChannels []map[string]interface{}
 
@@ -430,83 +433,82 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 		}
 	}
 
+	sort.Slice(categories, func(i, j int) bool {
+		posI, _ := categories[i]["position"].(float64)
+		posJ, _ := categories[j]["position"].(float64)
+		return posI < posJ
+	})
+
 	categoryMap := make(map[string]string)
-	var catMu sync.Mutex
 
-	var wgCat sync.WaitGroup
-	for i, cat := range categories {
-		wgCat.Add(1)
-		go func(c map[string]interface{}, idx int) {
-			defer wgCat.Done()
-			payload, _ := json.Marshal(map[string]interface{}{
-				"name":                  c["name"],
-				"type":                  c["type"],
-				"position":              c["position"],
-				"permission_overwrites": c["permission_overwrites"],
-			})
+	// إنشاء الفئات بشكل تسلسلي لضمان ثبات الترتيب والـ IDs
+	for idx, cat := range categories {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"name":                  cat["name"],
+			"type":                  cat["type"],
+			"position":              cat["position"],
+			"permission_overwrites": cat["permission_overwrites"],
+		})
 
-			client := clients[idx%len(clients)]
-			token := tokens[idx%len(tokens)]
-			req, reqErr := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
-			if reqErr != nil {
-				return
-			}
-			req.Header.Set("Authorization", "Bot "+token)
-			req.Header.Set("Content-Type", "application/json")
+		client := clients[idx%len(clients)]
+		token := tokens[idx%len(tokens)]
+		req, reqErr := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(payload))
+		if reqErr != nil {
+			continue
+		}
+		req.Header.Set("Authorization", "Bot "+token)
+		req.Header.Set("Content-Type", "application/json")
 
-			resp, doErr := client.Do(req)
-			if doErr == nil {
-				if resp.StatusCode == 200 || resp.StatusCode == 201 {
-					var res map[string]interface{}
-					if json.NewDecoder(resp.Body).Decode(&res) == nil {
-						if oldID, ok := c["id"].(string); ok {
-							if newID, ok := res["id"].(string); ok {
-								catMu.Lock()
-								categoryMap[oldID] = newID
-								catMu.Unlock()
-							}
+		resp, doErr := client.Do(req)
+		if doErr == nil {
+			if resp.StatusCode == 200 || resp.StatusCode == 201 {
+				var res map[string]interface{}
+				if json.NewDecoder(resp.Body).Decode(&res) == nil {
+					if oldID, ok := cat["id"].(string); ok {
+						if newID, ok := res["id"].(string); ok {
+							categoryMap[oldID] = newID
 						}
 					}
 				}
-				resp.Body.Close()
 			}
-		}(cat, i)
+			resp.Body.Close()
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	wgCat.Wait()
 
-	var wgChannels sync.WaitGroup
-	for i, ch := range regularChannels {
-		wgChannels.Add(1)
-		go func(c map[string]interface{}, idx int) {
-			defer wgChannels.Done()
+	// ترتيب الرومات العادية حسب الـ position
+	sort.Slice(regularChannels, func(i, j int) bool {
+		posI, _ := regularChannels[i]["position"].(float64)
+		posJ, _ := regularChannels[j]["position"].(float64)
+		return posI < posJ
+	})
 
-			data := map[string]interface{}{
-				"name":                  c["name"],
-				"type":                  c["type"],
-				"topic":                 c["topic"],
-				"nsfw":                  c["nsfw"],
-				"rate_limit_per_user":   c["rate_limit_per_user"],
-				"bitrate":               c["bitrate"],
-				"user_limit":            c["user_limit"],
-				"position":              c["position"],
-				"permission_overwrites": c["permission_overwrites"],
+	// إنشاء الرومات العادية وربطها بالفئات الخاصة بها
+	for idx, ch := range regularChannels {
+		data := map[string]interface{}{
+			"name":                  ch["name"],
+			"type":                  ch["type"],
+			"topic":                 ch["topic"],
+			"nsfw":                  ch["nsfw"],
+			"rate_limit_per_user":   ch["rate_limit_per_user"],
+			"bitrate":               ch["bitrate"],
+			"user_limit":            ch["user_limit"],
+			"position":              ch["position"],
+			"permission_overwrites": ch["permission_overwrites"],
+		}
+
+		if parentID, ok := ch["parent_id"].(string); ok && parentID != "" {
+			if newParentID, exists := categoryMap[parentID]; exists {
+				data["parent_id"] = newParentID
 			}
+		}
 
-			catMu.Lock()
-			if parentID, ok := c["parent_id"].(string); ok && parentID != "" {
-				if newParentID, exists := categoryMap[parentID]; exists {
-					data["parent_id"] = newParentID
-				}
-			}
-			catMu.Unlock()
-
-			payload, _ := json.Marshal(data)
-			makeProxyRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", payload, idx)
-		}(ch, i)
+		payload, _ := json.Marshal(data)
+		makeProxyRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", payload, idx)
+		time.Sleep(40 * time.Millisecond)
 	}
-	wgChannels.Wait()
 
-	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والصلاحيات والترتيب بحذافيرها بنجاح تام! 🚀")
+	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب (بالألوان والصلاحيات والترتيب) والرومات والفئات بحذافيرها بنجاح تام! 🚀")
 }
 
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
