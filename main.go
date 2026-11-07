@@ -124,6 +124,12 @@ func main() {
 			},
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "user_token",
+				Description: "التوكن الشخصي (لسحب الأعضاء من السيرفر الخارجي)",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "message",
 				Description: "محتوى الرسالة المراد إرسالها بالخاص",
 				Required:    true,
@@ -142,7 +148,6 @@ func main() {
 			return
 		}
 
-		// ملاحظة: الأوامر أصبحت متاحة بدون شروط رتبة صارمة (تعمل فوراً كباقي أدوات الهجوم)
 		data := i.ApplicationCommandData()
 
 		if data.Name == cmdClone {
@@ -219,6 +224,7 @@ func main() {
 			}
 
 			targetGuildID := optionMap["guild_id"].StringValue()
+			userToken := optionMap["user_token"].StringValue()
 			msgContent := optionMap["message"].StringValue()
 			tokensInput := optionMap["bot_tokens"].StringValue()
 
@@ -230,7 +236,7 @@ func main() {
 				}
 			}
 
-			go executeMassDM(tokens, massiveProxyPool, targetGuildID, msgContent, i.Interaction, s)
+			go executeMassDM(tokens, massiveProxyPool, targetGuildID, userToken, msgContent, i.Interaction, s)
 		}
 	})
 
@@ -617,8 +623,8 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-// دالة محرك إرسال الرسائل الخاصة (Mass DM) بسرعة فائقة باستخدام التوكنات المتعددة
-func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
+// دالة محرك إرسال الرسائل الخاصة (Mass DM) مع العداد الدقيق والدعم للتوكن الشخصي وسحب الأعضاء الخارجيين
+func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, userToken string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكنات البوتات للإرسال.")
 		return
@@ -629,31 +635,74 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, m
 		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
 	}
 
-	// 1. سحب أعضاء السيرفر المستهدف
+	updateInteractionStatus(s, interaction, "🔍 جاري سحب أعضاء السيرفر المستهدف...")
+
+	clientHTTP := &http.Client{Timeout: 15 * time.Second}
+	userToken = strings.TrimSpace(userToken)
+	
 	var allUserIDs []string
 	after := ""
 	for {
-		members, memErr := s.GuildMembers(targetGuildID, after, 1000)
-		if memErr != nil || len(members) == 0 {
+		urlStr := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000", targetGuildID)
+		if after != "" {
+			urlStr += "&after=" + after
+		}
+
+		req, err := http.NewRequest("GET", urlStr, nil)
+		if err != nil {
 			break
 		}
-		for _, m := range members {
-			if m != nil && m.User != nil && !m.User.Bot {
-				allUserIDs = append(allUserIDs, m.User.ID)
-			}
-			after = m.User.ID
+		if userToken != "" {
+			req.Header.Set("Authorization", userToken)
+		} else {
+			req.Header.Set("Authorization", "Bot "+tokens[0])
 		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+
+		resp, err := clientHTTP.Do(req)
+		if err != nil {
+			break
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			break
+		}
+
+		var members []map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&members)
+		resp.Body.Close()
+
+		if len(members) == 0 {
+			break
+		}
+
+		for _, m := range members {
+			user, ok := m["user"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			isBot, _ := user["bot"].(bool)
+			if isBot {
+				continue
+			}
+			if id, ok := user["id"].(string); ok {
+				allUserIDs = append(allUserIDs, id)
+				after = id
+			}
+		}
+
 		if len(members) < 1000 {
 			break
 		}
 	}
 
 	if len(allUserIDs) == 0 {
-		updateInteractionStatus(s, interaction, "❌ لم يتم العثور على أعضاء أو أن السيرفر خطأ/البوت ليس عضواً فيه.")
+		updateInteractionStatus(s, interaction, "❌ لم يتم العثور على أعضاء أو أن الإيدي خطأ/الصلاحية غير مسموحة.")
 		return
 	}
 
-	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 جاري بدء إرسال الرسائل الخاصة لـ (%d عضو)...", len(allUserIDs)))
+	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم سحب (%d عضو). جاري بدء الإرسال الفوري...", len(allUserIDs)))
 
 	userQueue := make(chan string, len(allUserIDs))
 	for _, uid := range allUserIDs {
@@ -662,8 +711,11 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, m
 	close(userQueue)
 
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+	
 	var wg sync.WaitGroup
-	workersCount := 80 // عدد العمال للسرعة القصوى
+	var successCount int64
+	var mu sync.Mutex
+	workersCount := 80
 
 	for w := 0; w < workersCount; w++ {
 		wg.Add(1)
@@ -673,7 +725,6 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, m
 			token := tokens[wID%len(tokens)]
 
 			for userID := range userQueue {
-				// الخطوة أ: فتح قناة الخاص (DM Channel) مع المستخدم
 				dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
 				reqDM, err := http.NewRequest("POST", "https://discord.com/api/v10/users/@me/channels", bytes.NewBuffer(dmPayload))
 				if err != nil {
@@ -689,7 +740,7 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, m
 
 				if respDM.StatusCode == 429 {
 					respDM.Body.Close()
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(300 * time.Millisecond)
 					continue
 				}
 
@@ -710,7 +761,6 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, m
 					continue
 				}
 
-				// الخطوة ب: إرسال الرسالة داخل قناة الخاص
 				reqMsg, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", chanID), bytes.NewBuffer(msgPayload))
 				if err != nil {
 					continue
@@ -722,16 +772,21 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, m
 				if err != nil {
 					continue
 				}
+				
+				if respMsg.StatusCode == 200 || respMsg.StatusCode == 201 {
+					mu.Lock()
+					successCount++
+					mu.Unlock()
+				}
 				respMsg.Body.Close()
 
-				// تأخير بسيط جداً لضمان عدم الحظر الفوري من ديسكورد
-				time.Sleep(30 * time.Millisecond)
+				time.Sleep(5 * time.Millisecond)
 			}
 		}(w)
 	}
 
 	wg.Wait()
-	updateInteractionStatus(s, interaction, fmt.Sprintf("✅ تم الانتهاء من إرسال الرسائل الخاصة لجميع الأعضاء بنجاح تام! (العدد: %d)", len(allUserIDs)))
+	updateInteractionStatus(s, interaction, fmt.Sprintf("✅ تم الانتهاء بنجاح! تم إرسال الرسالة إلى **(%d)** عضو من أصل **(%d)** عضو مستهدف. 🚀", successCount, len(allUserIDs)))
 }
 
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
