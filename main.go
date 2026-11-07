@@ -623,7 +623,6 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-// الدالة الصحيحة والمضمونة 100% لسحب الأعضاء والإرسال
 func executeMassDMFixed(tokens []string, rawProxies []string, targetGuildID string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكنات الإرسال الشخصية.")
@@ -920,7 +919,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 					var res map[string]interface{}
 					if json.NewDecoder(resp.Body).Decode(&res) == nil {
 						if id, ok := res["id"].(string); ok {
-							muChannels.LoadOrStore(id, true) // safely lock
 							muChannels.Lock()
 							newChannelIDs = append(newChannelIDs, id)
 							muChannels.Unlock()
