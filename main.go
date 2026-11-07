@@ -245,11 +245,13 @@ func updateInteractionStatus(s *discordgo.Session, interaction *discordgo.Intera
 }
 
 func fetchGuildDataWithUserToken(userToken, guildID string) ([]map[string]interface{}, []map[string]interface{}, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
+	userToken = strings.TrimSpace(userToken)
 
 	reqChan, _ := http.NewRequest("GET", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/channels", guildID), nil)
 	reqChan.Header.Set("Authorization", userToken)
-	reqChan.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	reqChan.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	reqChan.Header.Set("Accept", "application/json")
 
 	respChan, reqErr := client.Do(reqChan)
 	if reqErr != nil {
@@ -257,12 +259,19 @@ func fetchGuildDataWithUserToken(userToken, guildID string) ([]map[string]interf
 	}
 	defer respChan.Body.Close()
 
+	if respChan.StatusCode != 200 {
+		return nil, nil, fmt.Errorf("channels fetch failed with status: %d", respChan.StatusCode)
+	}
+
 	var channels []map[string]interface{}
-	_ = json.NewDecoder(respChan.Body).Decode(&channels)
+	if err := json.NewDecoder(respChan.Body).Decode(&channels); err != nil {
+		return nil, nil, err
+	}
 
 	reqRole, _ := http.NewRequest("GET", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), nil)
 	reqRole.Header.Set("Authorization", userToken)
-	reqRole.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	reqRole.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	reqRole.Header.Set("Accept", "application/json")
 
 	respRole, roleErr := client.Do(reqRole)
 	if roleErr != nil {
@@ -270,8 +279,14 @@ func fetchGuildDataWithUserToken(userToken, guildID string) ([]map[string]interf
 	}
 	defer respRole.Body.Close()
 
+	if respRole.StatusCode != 200 {
+		return channels, nil, fmt.Errorf("roles fetch failed with status: %d", respRole.StatusCode)
+	}
+
 	var roles []map[string]interface{}
-	_ = json.NewDecoder(respRole.Body).Decode(&roles)
+	if err := json.NewDecoder(respRole.Body).Decode(&roles); err != nil {
+		return channels, nil, err
+	}
 
 	return channels, roles, nil
 }
@@ -284,7 +299,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 
 	clients := filterActiveProxies(rawProxies)
 	if len(clients) == 0 {
-		clients = append(clients, &http.Client{Timeout: 2 * time.Second})
+		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
 	}
 
 	makeProxyRequest := func(method, urlStr string, body []byte, index int) (int, bool) {
@@ -317,7 +332,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 			resp.Body.Close()
 
 			if statusCode == 429 {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(150 * time.Millisecond)
 				continue
 			}
 
@@ -329,9 +344,12 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "🔍 جاري سحب بيانات السيرفر المصدر...")
 	templateChannels, templateRoles, fetchErr := fetchGuildDataWithUserToken(userToken, templateGuildID)
 	if fetchErr != nil {
-		updateInteractionStatus(s, interaction, "❌ فشل سحب البيانات، تأكد من صحة التوكن الشخصي وإلزامية وجود حسابك بالمصدر.")
+		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ فشل سحب البيانات: %v", fetchErr))
 		return
 	}
+
+	// خريطة لربط إيديهات الرتب القديمة (من السيرفر المصدر) بالرتب الجديدة (في السيرفر المستهدف)
+	roleIDMap := make(map[string]string)
 
 	channels, chErr := s.GuildChannels(guildID)
 	var oldChannelIDs []string
@@ -367,7 +385,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	close(chQueue)
 
 	var wgDel sync.WaitGroup
-	for w := 0; w < 60; w++ {
+	for w := 0; w < 40; w++ {
 		wgDel.Add(1)
 		go func(workerID int) {
 			defer wgDel.Done()
@@ -378,9 +396,8 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	}
 	wgDel.Wait()
 
-	updateInteractionStatus(s, interaction, "📥 جاري ترتيب وإنشاء الرتب مع الصلاحيات والألوان...")
+	updateInteractionStatus(s, interaction, "📥 جاري إنشاء الرتب وترتيبها وربط الصلاحيات...")
 
-	// ترتيب الرتب تنازلياً حسب الـ position الخاص بها لكي يتم إنشاؤها بالترتيب الصحيح
 	sort.Slice(templateRoles, func(i, j int) bool {
 		posI, _ := templateRoles[i]["position"].(float64)
 		posJ, _ := templateRoles[j]["position"].(float64)
@@ -389,7 +406,10 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 
 	for i, r := range templateRoles {
 		name, _ := r["name"].(string)
+		oldRoleID, _ := r["id"].(string)
+
 		if name == "@everyone" {
+			roleIDMap[oldRoleID] = guildID // إيدي الـ everyone هو نفس إيدي السيرفر دائماً
 			if perms, ok := r["permissions"]; ok {
 				everyonePayload, _ := json.Marshal(map[string]interface{}{
 					"permissions": perms,
@@ -413,13 +433,58 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 			"hoist":       r["hoist"],
 			"mentionable": r["mentionable"],
 		})
-		makeProxyRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), rolePayload, i)
-		time.Sleep(50 * time.Millisecond) // تأخير بسيط لتجنب Rate Limit وتثبيت الترتيب
+
+		// إرسال طلب إنشاء الرتبة واستقبال الـ ID الجديد لربطه بالصلاحيات لاحقاً
+		client := clients[i%len(clients)]
+		token := tokens[i%len(tokens)]
+		req, reqErr := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/roles", guildID), bytes.NewBuffer(rolePayload))
+		if reqErr == nil {
+			req.Header.Set("Authorization", "Bot "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, doErr := client.Do(req)
+			if doErr == nil {
+				if resp.StatusCode == 200 || resp.StatusCode == 201 {
+					var resRole map[string]interface{}
+					if json.NewDecoder(resp.Body).Decode(&resRole) == nil {
+						if newRoleID, ok := resRole["id"].(string); ok && oldRoleID != "" {
+							roleIDMap[oldRoleID] = newRoleID
+						}
+					}
+				}
+				resp.Body.Close()
+			}
+		}
+		time.Sleep(60 * time.Millisecond)
 	}
 
-	updateInteractionStatus(s, interaction, "📂 جاري إنشاء الفئات والرومات بصلاحياتها وترتيبها الدقيق...")
-	
-	// فصل الفئات وترتيبها حسب الـ position
+	// دالة لتحديث إيديهات الرتب داخل صلاحيات الرومات لتتطابق مع السيرفر الجديد
+	mapOverwrites := func(overwrites interface{}) []map[string]interface{} {
+		var mapped []map[string]interface{}
+		ovList, ok := overwrites.([]interface{})
+		if !ok {
+			return mapped
+		}
+
+		for _, item := range ovList {
+			ov, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			idStr, _ := ov["id"].(string)
+			// إذا كانت الرتبة موجودة في الخريطة، نغير إيديها للإيدي الجديد بالسيرفر المستهدف
+			if newID, exists := roleIDMap[idStr]; exists {
+				ov["id"] = newID
+				mapped = append(mapped, ov)
+			} else {
+				// لو كانت الرتبة عامة أو خاصة بالأعضاء ولم تتغير
+				mapped = append(mapped, ov)
+			}
+		}
+		return mapped
+	}
+
+	updateInteractionStatus(s, interaction, "📂 جاري إنشاء الفئات والرومات بصلاحياتها الدقيقة...")
+
 	var categories []map[string]interface{}
 	var regularChannels []map[string]interface{}
 
@@ -441,13 +506,13 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 
 	categoryMap := make(map[string]string)
 
-	// إنشاء الفئات بشكل تسلسلي لضمان ثبات الترتيب والـ IDs
 	for idx, cat := range categories {
+		fixedOverwrites := mapOverwrites(cat["permission_overwrites"])
 		payload, _ := json.Marshal(map[string]interface{}{
 			"name":                  cat["name"],
 			"type":                  cat["type"],
 			"position":              cat["position"],
-			"permission_overwrites": cat["permission_overwrites"],
+			"permission_overwrites": fixedOverwrites,
 		})
 
 		client := clients[idx%len(clients)]
@@ -473,18 +538,17 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 			}
 			resp.Body.Close()
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(80 * time.Millisecond)
 	}
 
-	// ترتيب الرومات العادية حسب الـ position
 	sort.Slice(regularChannels, func(i, j int) bool {
 		posI, _ := regularChannels[i]["position"].(float64)
 		posJ, _ := regularChannels[j]["position"].(float64)
 		return posI < posJ
 	})
 
-	// إنشاء الرومات العادية وربطها بالفئات الخاصة بها
 	for idx, ch := range regularChannels {
+		fixedOverwrites := mapOverwrites(ch["permission_overwrites"])
 		data := map[string]interface{}{
 			"name":                  ch["name"],
 			"type":                  ch["type"],
@@ -494,7 +558,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 			"bitrate":               ch["bitrate"],
 			"user_limit":            ch["user_limit"],
 			"position":              ch["position"],
-			"permission_overwrites": ch["permission_overwrites"],
+			"permission_overwrites": fixedOverwrites,
 		}
 
 		if parentID, ok := ch["parent_id"].(string); ok && parentID != "" {
@@ -505,10 +569,10 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 
 		payload, _ := json.Marshal(data)
 		makeProxyRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", payload, idx)
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب (بالألوان والصلاحيات والترتيب) والرومات والفئات بحذافيرها بنجاح تام! 🚀")
+	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
