@@ -1,4 +1,4 @@
-جpackage main
+package main
 
 import (
 	"bytes"
