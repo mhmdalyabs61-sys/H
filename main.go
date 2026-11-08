@@ -123,12 +123,12 @@ func main() {
 	cmdMassDM := "massdm"
 	commandMassDM := &discordgo.ApplicationCommand{
 		Name:        cmdMassDM,
-		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر عبر التقاطع المحلي والتوكن الشخصي",
+		Description: "إرسال رسالة خاصة (DM) لأعضاء السيرفر عبر التوكن والبوتات",
 		Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "guild_id", Description: "إيدي السيرفر المراد استهدافه", Required: true},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "user_token", Description: "التوكن الشخصي لحسابك (للسحب والإرسال)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "user_token", Description: "التوكن الشخصي لحسابك (للسحب)", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "message", Description: "محتوى الرسالة المراد إرسالها بالخاص", Required: true},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "التوكنات الشخصية الإضافية للإرسال (مفصولة بفاصلة)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات أو الحسابات للإرسال (مفصولة بفاصلة)", Required: true},
 		},
 	}
 
@@ -166,7 +166,7 @@ func main() {
 		} else if data.Name == cmdMassDM {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{Content: "🔍 جاري فحص الكاش والتقاطع المحلي للأعضاء...", Flags: discordgo.MessageFlagsEphemeral},
+				Data: &discordgo.InteractionResponseData{Content: "🔍 جاري سحب الأعضاء عبر التوكن الشخصي وبدء الحملة...", Flags: discordgo.MessageFlagsEphemeral},
 			})
 			tokens := parseTokens(optMap["bot_tokens"])
 			guildID := optMap["guild_id"].(string)
@@ -316,6 +316,66 @@ func fetchGuildDataWithUserToken(userToken, guildID string) ([]map[string]interf
 	}
 
 	return channels, roles, nil
+}
+
+func fetchMembersWithUserToken(userToken, guildID string) []string {
+	var allUserIDs []string
+	client := &http.Client{Timeout: 10 * time.Second}
+	userToken = strings.TrimSpace(userToken)
+
+	after := "0"
+	for {
+		urlStr := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000&after=%s", guildID, after)
+		req, err := http.NewRequest("GET", urlStr, nil)
+		if err != nil {
+			break
+		}
+
+		req.Header.Set("Authorization", userToken)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			break
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			break
+		}
+
+		var members []map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&members); err != nil {
+			resp.Body.Close()
+			break
+		}
+		resp.Body.Close()
+
+		if len(members) == 0 {
+			break
+		}
+
+		lastID := ""
+		for _, m := range members {
+			if user, ok := m["user"].(map[string]interface{}); ok {
+				if id, ok := user["id"].(string); ok {
+					if isBot, _ := user["bot"].(bool); !isBot {
+						allUserIDs = append(allUserIDs, id)
+					}
+					lastID = id
+				}
+			}
+		}
+
+		if len(members) < 1000 || lastID == "" {
+			break
+		}
+		after = lastID
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	return allUserIDs
 }
 
 func executeServerClonerWithUserToken(tokens []string, userToken string, rawProxies []string, guildID, templateGuildID string, interaction *discordgo.Interaction, s *discordgo.Session) {
@@ -601,68 +661,25 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 	userToken = strings.TrimSpace(userToken)
 
 	allUserIDs := getCachedUsersForGuild(targetGuildID)
-
 	if len(allUserIDs) == 0 {
-		updateInteractionStatus(s, interaction, "🔄 الكاش المحلي فارغ، جاري الاتصال بالـ Gateway لسحب كل الأعضاء...")
-
-		wsSess, err := discordgo.New(userToken)
-		if err != nil {
-			wsSess, _ = discordgo.New("Client " + userToken)
-		}
-
-		wsSess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildPresences
-
-		var allMembers []*discordgo.Member
-		var muMembers sync.Mutex
-
-		wsSess.AddHandler(func(sess *discordgo.Session, g *discordgo.GuildCreate) {
-			if g.Guild.ID == targetGuildID {
-				muMembers.Lock()
-				allMembers = append(allMembers, g.Guild.Members...)
-				muMembers.Unlock()
-			}
-		})
-
-		wsSess.AddHandler(func(sess *discordgo.Session, m *discordgo.GuildMembersChunk) {
-			if m.GuildID == targetGuildID {
-				muMembers.Lock()
-				allMembers = append(allMembers, m.Members...)
-				muMembers.Unlock()
-			}
-		})
-
-		if openErr := wsSess.Open(); openErr != nil {
-			reason := fmt.Sprintf("فشل فتح اتصال الـ WebSocket: %v", openErr)
-			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
-			sendReasonToChannel(s, responseChannelID, reason)
-			return
-		}
-
-		// طلب جميع الأعضاء بشكل صريح من السيرفر عبر الـ Gateway
-		_ = wsSess.RequestGuildMembers(targetGuildID, "", 0, "", true)
-
-		// الانتظار لمدة 7 ثوانٍ لضمان استقبال واستيعاب جميع الأعضاء
-		time.Sleep(7 * time.Second)
-		wsSess.Close()
-
-		for _, member := range allMembers {
-			if member != nil && member.User != nil && !member.User.Bot {
-				allUserIDs = append(allUserIDs, member.User.ID)
-				saveUserToCache(targetGuildID, member.User.ID)
-			}
+		updateInteractionStatus(s, interaction, "🔄 جاري سحب الأعضاء بالتوكن الشخصي مباشرة...")
+		allUserIDs = fetchMembersWithUserToken(userToken, targetGuildID)
+		for _, uid := range allUserIDs {
+			saveUserToCache(targetGuildID, uid)
 		}
 	}
 
 	if len(allUserIDs) == 0 {
-		reason := "فشل جلب الأعضاء. تأكد من أن الحساب الشخصي عضو في السيرفر المطلوب."
+		reason := "فشل جلب الأعضاء. تأكد من صحة التوكن الشخصي وأن الحساب عضو في السيرفر المطلوب."
 		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
 		sendReasonToChannel(s, responseChannelID, reason)
 		return
 	}
 
+	// دمج التوكن الشخصي مع توكنات البوتات/الحسابات الإضافية للإرسال الجماعي
 	allTokens := append([]string{userToken}, tokens...)
 
-	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم العثور على (%d عضو). جاري بدء الإرسال الفوري...", len(allUserIDs)))
+	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم العثور على (%d عضو). جاري بدء الإرسال عبر البوتات والتوكنات...", len(allUserIDs)))
 	sendReasonToChannel(s, responseChannelID, fmt.Sprintf("تم جلب (%d) عضو بنجاح وبدء إرسال الرسائل الخاصة.", len(allUserIDs)))
 
 	userQueue := make(chan string, len(allUserIDs))
@@ -688,7 +705,14 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 		go func(wID int) {
 			defer wg.Done()
 			client := clients[wID%len(clients)]
-			currUserToken := strings.TrimSpace(allTokens[wID%len(allTokens)])
+			currToken := strings.TrimSpace(allTokens[wID%len(allTokens)])
+
+			// تحديد نوع التوكن (إذا كان يبدأ بـ Bot أو عبارة عن توكن شخصي نضع الهيدر المناسب)
+			authHeader := currToken
+			if !strings.HasPrefix(authHeader, "Bot ") && !strings.HasPrefix(authHeader, "Client ") && len(currToken) > 50 {
+				// التوكن الشخصي لا يحتاج بادئة Bot، بينما البوتات قد تحتاجها أو تُرسل مباشرة
+				authHeader = currToken
+			}
 
 			for userID := range userQueue {
 				dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
@@ -697,7 +721,7 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 					continue
 				}
 				
-				reqDM.Header.Set("Authorization", currUserToken)
+				reqDM.Header.Set("Authorization", authHeader)
 				reqDM.Header.Set("Content-Type", "application/json")
 				reqDM.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
@@ -734,7 +758,7 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 					continue
 				}
 				
-				reqMsg.Header.Set("Authorization", currUserToken)
+				reqMsg.Header.Set("Authorization", authHeader)
 				reqMsg.Header.Set("Content-Type", "application/json")
 				reqMsg.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
