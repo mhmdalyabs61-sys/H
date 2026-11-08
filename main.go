@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -626,9 +627,15 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 				break
 			}
 
+			// تعديل هام: التقاط سبب الخطأ الحقيقي من ديسكورد بدلاً من الافتراض المبهم
 			if resp.StatusCode != 200 {
+				bodyBytes, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				break
+				
+				reason := fmt.Sprintf("فشل سحب الأعضاء. كود الرفض الحقيقي: %d | التفاصيل: %s", resp.StatusCode, string(bodyBytes))
+				updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
+				sendReasonToChannel(s, responseChannelID, reason)
+				return
 			}
 
 			var members []map[string]interface{}
