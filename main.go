@@ -599,83 +599,71 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 }
 
 func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies []string, targetGuildID string, messageContent string, responseChannelID string, interaction *discordgo.Interaction, s *discordgo.Session) {
-	client := &http.Client{Timeout: 15 * time.Second}
 	userToken = strings.TrimSpace(userToken)
 
 	allUserIDs := getCachedUsersForGuild(targetGuildID)
 
+	// بدلاً من استخدام طلب HTTP المعرض لخطأ 50001، سنعتمد على نظام الـ WebSocket Gateway عبر فتح جلسة مؤقتة بالتوكن الشخصي لالتقاط الأعضاء
 	if len(allUserIDs) == 0 {
-		updateInteractionStatus(s, interaction, "🔄 الكاش المحلي فارغ، جاري سحب الأيديات بالتوكن الشخصي...")
-		after := ""
-		for {
-			reqURL := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/members?limit=1000", targetGuildID)
-			if after != "" {
-				reqURL += "&after=" + after
-			}
+		updateInteractionStatus(s, interaction, "🔄 الكاش المحلي فارغ، جاري الاتصال بالـ Gateway (WebSocket) لسحب الأيديات بالتوكن الشخصي...")
 
-			req, err := http.NewRequest("GET", reqURL, nil)
-			if err != nil {
-				break
-			}
+		wsSess, err := discordgo.New(userToken)
+		if err != nil {
+			wsSess, _ = discordgo.New("Client " + userToken)
+		}
 
-			req.Header.Set("Authorization", userToken)
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-			req.Header.Set("Accept", "application/json")
+		wsSess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers
 
-			resp, err := client.Do(req)
-			if err != nil {
-				break
-			}
+		var captured []string
+		var wgConn sync.WaitGroup
+		wgConn.Add(1)
 
-			// تعديل هام: التقاط سبب الخطأ الحقيقي من ديسكورد بدلاً من الافتراض المبهم
-			if resp.StatusCode != 200 {
-				bodyBytes, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				
-				reason := fmt.Sprintf("فشل سحب الأعضاء. كود الرفض الحقيقي: %d | التفاصيل: %s", resp.StatusCode, string(bodyBytes))
-				updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
-				sendReasonToChannel(s, responseChannelID, reason)
-				return
-			}
-
-			var members []map[string]interface{}
-			if json.NewDecoder(resp.Body).Decode(&members) != nil {
-				resp.Body.Close()
-				break
-			}
-			resp.Body.Close()
-
-			if len(members) == 0 {
-				break
-			}
-
-			for _, m := range members {
-				user, ok := m["user"].(map[string]interface{})
-				if !ok {
-					continue
+		wsSess.AddHandler(func(sess *discordgo.Session, g *discordgo.GuildCreate) {
+			if g.Guild.ID == targetGuildID {
+				for _, member := range g.Guild.Members {
+					if member != nil && member.User != nil && !member.User.Bot {
+						captured = append(captured, member.User.ID)
+						saveUserToCache(targetGuildID, member.User.ID)
+					}
 				}
-
-				isBot, _ := user["bot"].(bool)
-				if isBot {
-					continue
-				}
-
-				id, ok := user["id"].(string)
-				if ok && id != "" {
-					allUserIDs = append(allUserIDs, id)
-					saveUserToCache(targetGuildID, id)
-					after = id
-				}
+				wgConn.Done()
 			}
+		})
 
-			if len(members) < 1000 {
-				break
+		if openErr := wsSess.Open(); openErr != nil {
+			reason := fmt.Sprintf("فشل فتح اتصال الـ WebSocket بالتوكن الشخصي: %v", openErr)
+			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
+			sendReasonToChannel(s, responseChannelID, reason)
+			return
+		}
+
+		// انتظار استلام البيانات بحد أقصى 5 ثوانٍ
+		done := make(chan struct{})
+		go func() {
+			wgConn.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			allUserIDs = captured
+		case <-time.After(5 * time.Second):
+			// إن لم يصل الحدث مباشرة، نحاول جلب ما توفر في الـ State
+			if g, err := wsSess.State.Guild(targetGuildID); err == nil && g != nil {
+				for _, m := range g.Members {
+					if m != nil && m.User != nil && !m.User.Bot {
+						allUserIDs = append(allUserIDs, m.User.ID)
+						saveUserToCache(targetGuildID, m.User.ID)
+					}
+				}
 			}
 		}
+
+		wsSess.Close()
 	}
 
 	if len(allUserIDs) == 0 {
-		reason := "فشل سحب الأعضاء. الحساب الشخصي لا يملك وصولاً مباشراً أو السيرفر محمي."
+		reason := "فشل جلب الأعضاء عبر الـ WebSocket. تأكد من أن الحساب الشخصي عضو في السيرفر المطلوب."
 		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
 		sendReasonToChannel(s, responseChannelID, reason)
 		return
