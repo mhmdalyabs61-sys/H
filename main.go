@@ -769,7 +769,6 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 		}(w)
 	}
 
-	wg.ValWait := wg.Wait()
 	wg.Wait()
 	finalReport := fmt.Sprintf("✅ انتهت الحملة بنجاح! تم إرسال الرسالة إلى **(%d)** من أصل **(%d)** عضو. 🚀", successCount, len(allUserIDs))
 	updateInteractionStatus(s, interaction, finalReport)
@@ -927,7 +926,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 				if resp.StatusCode == 200 || resp.StatusCode == 201 {
 					var res map[string]interface{}
 					if json.NewDecoder(resp.Body).Decode(&res) == nil {
-						if id,, ok := res["id"].(string); ok {
+						if id, ok := res["id"].(string); ok {
 							muChannels.Lock()
 							newChannelIDs = append(newChannelIDs, id)
 							muChannels.Unlock()
