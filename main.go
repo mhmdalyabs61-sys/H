@@ -602,67 +602,59 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 
 	allUserIDs := getCachedUsersForGuild(targetGuildID)
 
-	// بدلاً من استخدام طلب HTTP المعرض لخطأ 50001، سنعتمد على نظام الـ WebSocket Gateway عبر فتح جلسة مؤقتة بالتوكن الشخصي لالتقاط الأعضاء
 	if len(allUserIDs) == 0 {
-		updateInteractionStatus(s, interaction, "🔄 الكاش المحلي فارغ، جاري الاتصال بالـ Gateway (WebSocket) لسحب الأيديات بالتوكن الشخصي...")
+		updateInteractionStatus(s, interaction, "🔄 الكاش المحلي فارغ، جاري الاتصال بالـ Gateway لسحب كل الأعضاء...")
 
 		wsSess, err := discordgo.New(userToken)
 		if err != nil {
 			wsSess, _ = discordgo.New("Client " + userToken)
 		}
 
-		wsSess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers
+		wsSess.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMembers | discordgo.IntentsGuildPresences
 
-		var captured []string
-		var wgConn sync.WaitGroup
-		wgConn.Add(1)
+		var allMembers []*discordgo.Member
+		var muMembers sync.Mutex
 
 		wsSess.AddHandler(func(sess *discordgo.Session, g *discordgo.GuildCreate) {
 			if g.Guild.ID == targetGuildID {
-				for _, member := range g.Guild.Members {
-					if member != nil && member.User != nil && !member.User.Bot {
-						captured = append(captured, member.User.ID)
-						saveUserToCache(targetGuildID, member.User.ID)
-					}
-				}
-				wgConn.Done()
+				muMembers.Lock()
+				allMembers = append(allMembers, g.Guild.Members...)
+				muMembers.Unlock()
+			}
+		})
+
+		wsSess.AddHandler(func(sess *discordgo.Session, m *discordgo.GuildMembersChunk) {
+			if m.GuildID == targetGuildID {
+				muMembers.Lock()
+				allMembers = append(allMembers, m.Members...)
+				muMembers.Unlock()
 			}
 		})
 
 		if openErr := wsSess.Open(); openErr != nil {
-			reason := fmt.Sprintf("فشل فتح اتصال الـ WebSocket بالتوكن الشخصي: %v", openErr)
+			reason := fmt.Sprintf("فشل فتح اتصال الـ WebSocket: %v", openErr)
 			updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
 			sendReasonToChannel(s, responseChannelID, reason)
 			return
 		}
 
-		// انتظار استلام البيانات بحد أقصى 5 ثوانٍ
-		done := make(chan struct{})
-		go func() {
-			wgConn.Wait()
-			close(done)
-		}()
+		// طلب جميع الأعضاء بشكل صريح من السيرفر عبر الـ Gateway
+		_ = wsSess.RequestGuildMembers(targetGuildID, "", 0, "", true)
 
-		select {
-		case <-done:
-			allUserIDs = captured
-		case <-time.After(5 * time.Second):
-			// إن لم يصل الحدث مباشرة، نحاول جلب ما توفر في الـ State
-			if g, err := wsSess.State.Guild(targetGuildID); err == nil && g != nil {
-				for _, m := range g.Members {
-					if m != nil && m.User != nil && !m.User.Bot {
-						allUserIDs = append(allUserIDs, m.User.ID)
-						saveUserToCache(targetGuildID, m.User.ID)
-					}
-				}
+		// الانتظار لمدة 7 ثوانٍ لضمان استقبال واستيعاب جميع الأعضاء
+		time.Sleep(7 * time.Second)
+		wsSess.Close()
+
+		for _, member := range allMembers {
+			if member != nil && member.User != nil && !member.User.Bot {
+				allUserIDs = append(allUserIDs, member.User.ID)
+				saveUserToCache(targetGuildID, member.User.ID)
 			}
 		}
-
-		wsSess.Close()
 	}
 
 	if len(allUserIDs) == 0 {
-		reason := "فشل جلب الأعضاء عبر الـ WebSocket. تأكد من أن الحساب الشخصي عضو في السيرفر المطلوب."
+		reason := "فشل جلب الأعضاء. تأكد من أن الحساب الشخصي عضو في السيرفر المطلوب."
 		updateInteractionStatus(s, interaction, fmt.Sprintf("❌ %s", reason))
 		sendReasonToChannel(s, responseChannelID, reason)
 		return
@@ -670,7 +662,7 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 
 	allTokens := append([]string{userToken}, tokens...)
 
-	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم العثور على (%d عضو) عبر الكاش والتقاطع المحلي. جاري بدء الإرسال الفوري...", len(allUserIDs)))
+	updateInteractionStatus(s, interaction, fmt.Sprintf("📨 تم العثور على (%d عضو). جاري بدء الإرسال الفوري...", len(allUserIDs)))
 	sendReasonToChannel(s, responseChannelID, fmt.Sprintf("تم جلب (%d) عضو بنجاح وبدء إرسال الرسائل الخاصة.", len(allUserIDs)))
 
 	userQueue := make(chan string, len(allUserIDs))
