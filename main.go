@@ -419,7 +419,7 @@ func executeServerClonerWithUserToken(tokens []string, userToken string, rawProx
 
 	clients := filterActiveProxies(rawProxies)
 	if len(clients) == 0 {
-		clients = append(clients, &http.Client{Timeout: 3 * time.Second})
+		clients = append(clients, &http.Client{Timeout: 1 * time.Second})
 	}
 
 	makeProxyRequest := func(method, urlStr string, body []byte, index int) (int, bool) {
