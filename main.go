@@ -28,7 +28,6 @@ var massiveProxyPool = []string{
 	"200.105.215.12:80",
 }
 
-// روابط الدعوة الـ 8 الخاصة بالبوتات لسهولة الوصول والإضافة
 var botInviteLinks = []string{
 	"https://discord.com/oauth2/authorize?client_id=1569045384469151745&permissions=8&integration_type=0&scope=bot",
 	"https://discord.com/oauth2/authorize?client_id=1569045739760255177&permissions=8&integration_type=0&scope=bot",
@@ -144,15 +143,15 @@ func main() {
 		},
 	}
 
-	// أمر الإرسال المباشر لأشخاص محددين بأيديهم
+	// أمر الإرسال المباشر بالتوكن الشخصي حصراً
 	cmdSendMsg := "sendmsg"
 	commandSendMsg := &discordgo.ApplicationCommand{
 		Name:        cmdSendMsg,
-		Description: "إرسال رسالة خاصة لأشخاص محددين عبر إدخال آيديوتهم",
+		Description: "إرسال رسالة خاصة لأشخاص محددين عبر التوكن الشخصي (بدون شرط السيرفر المشترك)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "user_ids", Description: "آيدي الشخص أو الأشخاص (مفصولة بمسافة أو فاصلة)", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "message", Description: "محتوى الرسالة المراد إرسالها", Required: true},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_token", Description: "توكن البوت المستخدم للإرسال", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "user_token", Description: "التوكن الشخصي لحسابك للإرسال", Required: true},
 		},
 	}
 
@@ -207,12 +206,12 @@ func main() {
 		} else if data.Name == cmdSendMsg {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{Content: "📤 جاري إرسال الرسالة للأشخاص المحددين...", Flags: discordgo.MessageFlagsEphemeral},
+				Data: &discordgo.InteractionResponseData{Content: "📤 جاري إرسال الرسالة عبر حسابك الشخصي...", Flags: discordgo.MessageFlagsEphemeral},
 			})
 			targetIDs := parseTokens(optMap["user_ids"])
 			message := optMap["message"].(string)
-			botToken := optMap["bot_token"].(string)
-			go executeDirectTargetDM(botToken, targetIDs, message, i.Interaction, s)
+			userToken := optMap["user_token"].(string)
+			go executeUserTokenDirectDM(userToken, targetIDs, message, i.Interaction, s)
 
 		} else if data.Name == cmdInvites {
 			var sb strings.Builder
@@ -827,11 +826,11 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 	sendReasonToChannel(s, responseChannelID, finalReport)
 }
 
-// دالة تنفيذ الإرسال المباشر لأشخاص محددين عبر الأيدي
-func executeDirectTargetDM(botToken string, targetIDs []string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
-	botToken = strings.TrimSpace(botToken)
-	if botToken == "" {
-		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكن البوت للإرسال.")
+// دالة تنفيذ الإرسال المباشر باستخدام التوكن الشخصي حصراً (تتجاوز شرط السيرفر المشترك)
+func executeUserTokenDirectDM(userToken string, targetIDs []string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
+	userToken = strings.TrimSpace(userToken)
+	if userToken == "" {
+		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال التوكن الشخصي.")
 		return
 	}
 
@@ -845,16 +844,16 @@ func executeDirectTargetDM(botToken string, targetIDs []string, messageContent s
 			continue
 		}
 
-		// 1. فتح قناة الـ DM
+		// 1. فتح قناة الـ DM بالتوكن الشخصي (بدون كلمة Bot)
 		dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
 		reqDM, err := http.NewRequest("POST", "https://discord.com/api/v10/users/@me/channels", bytes.NewBuffer(dmPayload))
 		if err != nil {
 			continue
 		}
 
-		reqDM.Header.Set("Authorization", "Bot "+botToken)
+		reqDM.Header.Set("Authorization", userToken)
 		reqDM.Header.Set("Content-Type", "application/json")
-		reqDM.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+		reqDM.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 		respDM, err := client.Do(reqDM)
 		if err != nil {
@@ -878,15 +877,15 @@ func executeDirectTargetDM(botToken string, targetIDs []string, messageContent s
 			continue
 		}
 
-		// 2. إرسال الرسالة
+		// 2. إرسال الرسالة من الحساب الشخصي
 		reqMsg, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", chanID), bytes.NewBuffer(msgPayload))
 		if err != nil {
 			continue
 		}
 
-		reqMsg.Header.Set("Authorization", "Bot "+botToken)
+		reqMsg.Header.Set("Authorization", userToken)
 		reqMsg.Header.Set("Content-Type", "application/json")
-		reqMsg.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+		reqMsg.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 		respMsg, err := client.Do(reqMsg)
 		if err != nil {
@@ -899,7 +898,7 @@ func executeDirectTargetDM(botToken string, targetIDs []string, messageContent s
 		respMsg.Body.Close()
 	}
 
-	finalReport := fmt.Sprintf("✅ تم إرسال الرسالة بنجاح إلى **(%d)** من أصل **(%d)** شخص محدد! 🎯", successCount, len(targetIDs))
+	finalReport := fmt.Sprintf("✅ تم إرسال الرسالة بنجاح عبر حسابك الشخصي إلى **(%d)** من أصل **(%d)** شخص! 🎯", successCount, len(targetIDs))
 	updateInteractionStatus(s, interaction, finalReport)
 }
 
