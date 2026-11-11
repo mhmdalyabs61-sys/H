@@ -143,11 +143,10 @@ func main() {
 		},
 	}
 
-	// أمر الإرسال المباشر بالتوكن الشخصي حصراً
 	cmdSendMsg := "sendmsg"
 	commandSendMsg := &discordgo.ApplicationCommand{
 		Name:        cmdSendMsg,
-		Description: "إرسال رسالة خاصة لأشخاص محددين عبر التوكن الشخصي (بدون شرط السيرفر المشترك)",
+		Description: "إرسال رسالة خاصة لأشخاص محددين عبر التوكن الشخصي والبروكسيات",
 		Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "user_ids", Description: "آيدي الشخص أو الأشخاص (مفصولة بمسافة أو فاصلة)", Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "message", Description: "محتوى الرسالة المراد إرسالها", Required: true},
@@ -206,12 +205,12 @@ func main() {
 		} else if data.Name == cmdSendMsg {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{Content: "📤 جاري إرسال الرسالة عبر حسابك الشخصي...", Flags: discordgo.MessageFlagsEphemeral},
+				Data: &discordgo.InteractionResponseData{Content: "📤 جاري إرسال الرسالة عبر حسابك الشخصي والبروكسيات...", Flags: discordgo.MessageFlagsEphemeral},
 			})
 			targetIDs := parseTokens(optMap["user_ids"])
 			message := optMap["message"].(string)
 			userToken := optMap["user_token"].(string)
-			go executeUserTokenDirectDM(userToken, targetIDs, message, i.Interaction, s)
+			go executeUserTokenDirectDMWithProxies(userToken, targetIDs, message, massiveProxyPool, i.Interaction, s)
 
 		} else if data.Name == cmdInvites {
 			var sb strings.Builder
@@ -826,85 +825,116 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 	sendReasonToChannel(s, responseChannelID, finalReport)
 }
 
-// دالة تنفيذ الإرسال المباشر باستخدام التوكن الشخصي حصراً (تتجاوز شرط السيرفر المشترك)
-func executeUserTokenDirectDM(userToken string, targetIDs []string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
+// دالة الإرسال الشخصي بالتوكن والبروكسيات المدعومة بالكامل
+func executeUserTokenDirectDMWithProxies(userToken string, targetIDs []string, messageContent string, rawProxies []string, interaction *discordgo.Interaction, s *discordgo.Session) {
 	userToken = strings.TrimSpace(userToken)
 	if userToken == "" {
 		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال التوكن الشخصي.")
 		return
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
-
-	var successCount int
-	for _, userID := range targetIDs {
-		userID = strings.TrimSpace(userID)
-		if userID == "" {
-			continue
-		}
-
-		// 1. فتح قناة الـ DM بالتوكن الشخصي (بدون كلمة Bot)
-		dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
-		reqDM, err := http.NewRequest("POST", "https://discord.com/api/v10/users/@me/channels", bytes.NewBuffer(dmPayload))
-		if err != nil {
-			continue
-		}
-
-		reqDM.Header.Set("Authorization", userToken)
-		reqDM.Header.Set("Content-Type", "application/json")
-		reqDM.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-		respDM, err := client.Do(reqDM)
-		if err != nil {
-			continue
-		}
-
-		if respDM.StatusCode != 200 && respDM.StatusCode != 201 {
-			respDM.Body.Close()
-			continue
-		}
-
-		var dmRes map[string]interface{}
-		err = json.NewDecoder(respDM.Body).Decode(&dmRes)
-		respDM.Body.Close()
-		if err != nil {
-			continue
-		}
-
-		chanID, ok := dmRes["id"].(string)
-		if !ok || chanID == "" {
-			continue
-		}
-
-		// 2. إرسال الرسالة من الحساب الشخصي
-		reqMsg, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", chanID), bytes.NewBuffer(msgPayload))
-		if err != nil {
-			continue
-		}
-
-		reqMsg.Header.Set("Authorization", userToken)
-		reqMsg.Header.Set("Content-Type", "application/json")
-		reqMsg.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-		respMsg, err := client.Do(reqMsg)
-		if err != nil {
-			continue
-		}
-
-		if respMsg.StatusCode == 200 || respMsg.StatusCode == 201 {
-			successCount++
-		}
-		respMsg.Body.Close()
+	clients := filterActiveProxies(rawProxies)
+	if len(clients) == 0 {
+		clients = append(clients, &http.Client{Timeout: 5 * time.Second})
 	}
 
-	finalReport := fmt.Sprintf("✅ تم إرسال الرسالة بنجاح عبر حسابك الشخصي إلى **(%d)** من أصل **(%d)** شخص! 🎯", successCount, len(targetIDs))
+	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+
+	userQueue := make(chan string, len(targetIDs))
+	for _, id := range targetIDs {
+		if strings.TrimSpace(id) != "" {
+			userQueue <- strings.TrimSpace(id)
+		}
+	}
+	close(userQueue)
+
+	var wg sync.WaitGroup
+	var successCount int64
+	var mu sync.Mutex
+	
+	workersCount := 10
+	if len(targetIDs) < 10 {
+		workersCount = len(targetIDs)
+	}
+
+	for w := 0; w < workersCount; w++ {
+		wg.Add(1)
+		go func(wID int) {
+			defer wg.Done()
+			client := clients[wID%len(clients)]
+
+			for userID := range userQueue {
+				dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
+				reqDM, err := http.NewRequest("POST", "https://discord.com/api/v10/users/@me/channels", bytes.NewBuffer(dmPayload))
+				if err != nil {
+					continue
+				}
+
+				reqDM.Header.Set("Authorization", userToken)
+				reqDM.Header.Set("Content-Type", "application/json")
+				reqDM.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+				reqDM.Header.Set("Accept", "*/*")
+				reqDM.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+				respDM, err := client.Do(reqDM)
+				if err != nil {
+					continue
+				}
+
+				if respDM.StatusCode == 429 {
+					respDM.Body.Close()
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				if respDM.StatusCode != 200 && respDM.StatusCode != 201 {
+					respDM.Body.Close()
+					continue
+				}
+
+				var dmRes map[string]interface{}
+				err = json.NewDecoder(respDM.Body).Decode(&dmRes)
+				respDM.Body.Close()
+				if err != nil {
+					continue
+				}
+
+				chanID, ok := dmRes["id"].(string)
+				if !ok || chanID == "" {
+					continue
+				}
+
+				reqMsg, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", chanID), bytes.NewBuffer(msgPayload))
+				if err != nil {
+					continue
+				}
+
+				reqMsg.Header.Set("Authorization", userToken)
+				reqMsg.Header.Set("Content-Type", "application/json")
+				reqMsg.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+
+				respMsg, err := client.Do(reqMsg)
+				if err != nil {
+					continue
+				}
+
+				if respMsg.StatusCode == 200 || respMsg.StatusCode == 201 {
+					mu.Lock()
+					successCount++
+					mu.Unlock()
+				}
+				respMsg.Body.Close()
+
+				time.Sleep(500 * time.Millisecond)
+			}
+		}(w)
+	}
+
+	wg.Wait()
+	finalReport := fmt.Sprintf("✅ تم إرسال الرسالة بنجاح عبر حسابك الشخصي (مع البروكسيات) إلى **(%d)** من أصل **(%d)** شخص! 🎯", successCount, len(targetIDs))
 	updateInteractionStatus(s, interaction, finalReport)
 }
 
-// ==========================================
-// محرك Nuke1 الأقصى المُصحّح (Overdrive Mode - طابور ديناميكي فائق السرعة)
-// ==========================================
 func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roomName string, roomsCount int, messageContent string, messagesCount int, includeBan bool, s *discordgo.Session) {
 	if len(tokens) == 0 {
 		return
@@ -943,7 +973,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 			}
 			for _, m := range members {
 				if m != nil && m.User != nil {
-					// استبعاد البوتات ومستخدم البوت الأساسي لمنع الفشل
 					if !botIDs[m.User.ID] && !m.User.Bot {
 						allUserIDs = append(allUserIDs, m.User.ID)
 					}
@@ -966,7 +995,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		}
 	}
 
-	// 1. حذف الرومات القديمة فوراً وبأقصى توازي ممكن
 	chQueue := make(chan string, len(oldChannelIDs))
 	for _, id := range oldChannelIDs {
 		chQueue <- id
@@ -996,7 +1024,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgDel.Wait()
 
-	// 2. إبادة الباندات (Dynamic Queue Mode: عمال متعددين يسحبون من الطابور المشترك بأقصى سرعة)
 	if includeBan && len(allUserIDs) > 0 && len(tokens) > 0 {
 		var wgBan sync.WaitGroup
 		banQueue := make(chan string, len(allUserIDs))
@@ -1005,7 +1032,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		}
 		close(banQueue)
 
-		// 15 عامل لكل توكن لتحقيق أقصى ضغط وتوازي ممكن
 		workersPerToken := 15
 		totalWorkers := len(tokens) * workersPerToken
 
@@ -1037,7 +1063,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 		wgBan.Wait()
 	}
 
-	// 3. إنشاء الرومات الجديدة بأقصى توازي واندفاع
 	var newChannelIDs []string
 	var muChannels sync.Mutex
 	var wgCreate sync.WaitGroup
@@ -1084,7 +1109,6 @@ func executeNukeEngine(tokens []string, rawProxies []string, guildID, botID, roo
 	}
 	wgCreate.Wait()
 
-	// 4. إرسال رسائل السبام في الرومات الجديدة بلا توقف
 	if len(newChannelIDs) > 0 && messagesCount > 0 {
 		var wgMsg sync.WaitGroup
 		for i, chID := range newChannelIDs {
