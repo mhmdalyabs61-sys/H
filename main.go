@@ -144,6 +144,18 @@ func main() {
 		},
 	}
 
+	// أمر الإرسال المباشر لأشخاص محددين بأيديهم
+	cmdSendMsg := "sendmsg"
+	commandSendMsg := &discordgo.ApplicationCommand{
+		Name:        cmdSendMsg,
+		Description: "إرسال رسالة خاصة لأشخاص محددين عبر إدخال آيديوتهم",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "user_ids", Description: "آيدي الشخص أو الأشخاص (مفصولة بمسافة أو فاصلة)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "message", Description: "محتوى الرسالة المراد إرسالها", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "bot_token", Description: "توكن البوت المستخدم للإرسال", Required: true},
+		},
+	}
+
 	cmdInvites := "invites"
 	commandInvites := &discordgo.ApplicationCommand{
 		Name:        cmdInvites,
@@ -192,6 +204,16 @@ func main() {
 			message := optMap["message"].(string)
 			go executeCrossReferenceMassDM(tokens, userToken, massiveProxyPool, guildID, message, i.ChannelID, i.Interaction, s)
 
+		} else if data.Name == cmdSendMsg {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{Content: "📤 جاري إرسال الرسالة للأشخاص المحددين...", Flags: discordgo.MessageFlagsEphemeral},
+			})
+			targetIDs := parseTokens(optMap["user_ids"])
+			message := optMap["message"].(string)
+			botToken := optMap["bot_token"].(string)
+			go executeDirectTargetDM(botToken, targetIDs, message, i.Interaction, s)
+
 		} else if data.Name == cmdInvites {
 			var sb strings.Builder
 			sb.WriteString("🔗 **روابط دعوة البوتات الـ 8 (مع صلاحية Administrator):**\n\n")
@@ -217,8 +239,9 @@ func main() {
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandClone)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandNuke)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandMassDM)
+	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandSendMsg)
 	_, _ = sess.ApplicationCommandCreate(sess.State.User.ID, "", commandInvites)
-	fmt.Println("⚡ الأوامر (cloner, nuke1, massdm, invites) جاهزة بالكامل!")
+	fmt.Println("⚡ الأوامر (cloner, nuke1, massdm, sendmsg, invites) جاهزة بالكامل!")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -802,6 +825,82 @@ func executeCrossReferenceMassDM(tokens []string, userToken string, rawProxies [
 	finalReport := fmt.Sprintf("✅ انتهت الحملة بنجاح! تم إرسال الرسالة إلى **(%d)** من أصل **(%d)** عضو. 🚀", successCount, len(allUserIDs))
 	updateInteractionStatus(s, interaction, finalReport)
 	sendReasonToChannel(s, responseChannelID, finalReport)
+}
+
+// دالة تنفيذ الإرسال المباشر لأشخاص محددين عبر الأيدي
+func executeDirectTargetDM(botToken string, targetIDs []string, messageContent string, interaction *discordgo.Interaction, s *discordgo.Session) {
+	botToken = strings.TrimSpace(botToken)
+	if botToken == "" {
+		updateInteractionStatus(s, interaction, "❌ خطأ: لم يتم إدخال توكن البوت للإرسال.")
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	msgPayload, _ := json.Marshal(map[string]string{"content": messageContent})
+
+	var successCount int
+	for _, userID := range targetIDs {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			continue
+		}
+
+		// 1. فتح قناة الـ DM
+		dmPayload, _ := json.Marshal(map[string]string{"recipient_id": userID})
+		reqDM, err := http.NewRequest("POST", "https://discord.com/api/v10/users/@me/channels", bytes.NewBuffer(dmPayload))
+		if err != nil {
+			continue
+		}
+
+		reqDM.Header.Set("Authorization", "Bot "+botToken)
+		reqDM.Header.Set("Content-Type", "application/json")
+		reqDM.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+
+		respDM, err := client.Do(reqDM)
+		if err != nil {
+			continue
+		}
+
+		if respDM.StatusCode != 200 && respDM.StatusCode != 201 {
+			respDM.Body.Close()
+			continue
+		}
+
+		var dmRes map[string]interface{}
+		err = json.NewDecoder(respDM.Body).Decode(&dmRes)
+		respDM.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		chanID, ok := dmRes["id"].(string)
+		if !ok || chanID == "" {
+			continue
+		}
+
+		// 2. إرسال الرسالة
+		reqMsg, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", chanID), bytes.NewBuffer(msgPayload))
+		if err != nil {
+			continue
+		}
+
+		reqMsg.Header.Set("Authorization", "Bot "+botToken)
+		reqMsg.Header.Set("Content-Type", "application/json")
+		reqMsg.Header.Set("User-Agent", "DiscordBot (https://discord.com, v10)")
+
+		respMsg, err := client.Do(reqMsg)
+		if err != nil {
+			continue
+		}
+
+		if respMsg.StatusCode == 200 || respMsg.StatusCode == 201 {
+			successCount++
+		}
+		respMsg.Body.Close()
+	}
+
+	finalReport := fmt.Sprintf("✅ تم إرسال الرسالة بنجاح إلى **(%d)** من أصل **(%d)** شخص محدد! 🎯", successCount, len(targetIDs))
+	updateInteractionStatus(s, interaction, finalReport)
 }
 
 // ==========================================
